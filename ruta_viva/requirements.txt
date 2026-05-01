@@ -5,6 +5,7 @@ asyncpg
 alembic
 geoalchemy2
 pgvector
+openai
 pydantic
 pydantic-settings
 passlib[bcrypt]==1.7.4

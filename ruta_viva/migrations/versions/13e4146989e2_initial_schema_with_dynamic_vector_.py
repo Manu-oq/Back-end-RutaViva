@@ -1,8 +1,8 @@
-"""initial schema
+"""Initial schema with dynamic vector dimensions
 
-Revision ID: 02e127623076
+Revision ID: 13e4146989e2
 Revises: 
-Create Date: 2026-04-18 15:53:24.104372
+Create Date: 2026-04-30 14:09:12.693713
 
 """
 from typing import Sequence, Union
@@ -10,11 +10,13 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+import pgvector.sqlalchemy
 import geoalchemy2
-import pgvector.sqlalchemy.vector
+from geoalchemy2 import Geometry
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '02e127623076'
+revision: str = '13e4146989e2'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -65,13 +67,13 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_itineraries_tourist_id'), 'itineraries', ['tourist_id'], unique=False)
-    op.create_table('pois',
+    op.create_geospatial_table('pois',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('entrepreneur_id', sa.UUID(), nullable=True),
     sa.Column('name', sa.String(length=255), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
-    sa.Column('location', geoalchemy2.types.Geometry(geometry_type='POINT', srid=4326, dimension=2, from_text='ST_GeomFromEWKT', name='geometry', nullable=False), nullable=False),
-    sa.Column('description_embedding', pgvector.sqlalchemy.vector.VECTOR(dim=1536), nullable=True),
+    sa.Column('location', Geometry(geometry_type='POINT', srid=4326, dimension=2, spatial_index=False, from_text='ST_GeomFromEWKT', name='geometry', nullable=False), nullable=False),
+    sa.Column('description_embedding', pgvector.sqlalchemy.vector.VECTOR(dim=1536), nullable=False),
     sa.Column('access_type', sa.String(length=50), nullable=False),
     sa.Column('contact_phone', sa.String(length=50), nullable=True),
     sa.Column('contact_email', sa.String(length=255), nullable=True),
@@ -79,6 +81,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['entrepreneur_id'], ['entrepreneur_profiles.user_id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_geospatial_index('idx_pois_location', 'pois', ['location'], unique=False, postgresql_using='gist', postgresql_ops={})
     op.create_index(op.f('ix_pois_entrepreneur_id'), 'pois', ['entrepreneur_id'], unique=False)
     op.create_index(op.f('ix_pois_name'), 'pois', ['name'], unique=False)
     op.create_table('bookmarks',
@@ -148,8 +151,8 @@ def downgrade() -> None:
     op.drop_table('bookmarks')
     op.drop_index(op.f('ix_pois_name'), table_name='pois')
     op.drop_index(op.f('ix_pois_entrepreneur_id'), table_name='pois')
-    op.drop_index('idx_pois_location', table_name='pois', postgresql_using='gist')
-    op.drop_table('pois')
+    op.drop_geospatial_index('idx_pois_location', table_name='pois', postgresql_using='gist', column_name='location')
+    op.drop_geospatial_table('pois')
     op.drop_index(op.f('ix_itineraries_tourist_id'), table_name='itineraries')
     op.drop_table('itineraries')
     op.drop_table('tourist_profiles')

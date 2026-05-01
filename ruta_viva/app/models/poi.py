@@ -32,7 +32,7 @@ class POI(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str] = mapped_column(Geometry("POINT", srid=4326), nullable=False)
-    description_embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
+    description_embedding: Mapped[list[float]] = mapped_column(Vector(1536))
     access_type: Mapped[str] = mapped_column(String(50), nullable=False)
     contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)

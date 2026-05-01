@@ -1,15 +1,19 @@
+import asyncio
+import geoalchemy2  # noqa: F401
 from logging.config import fileConfig
+
 from alembic import context
+from geoalchemy2.alembic_helpers import include_object
+from geoalchemy2.alembic_helpers import render_item
+from geoalchemy2.alembic_helpers import writer
+from pgvector.sqlalchemy import Vector  # noqa: F401
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-import asyncio
-import geoalchemy2  # noqa: F401
-from pgvector.sqlalchemy import Vector  # noqa: F401
 
-from app.core.config import settings
 import app.db.models  # noqa: F401
 from app.db.base import Base
+from app.core.config import settings
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.async_database_uri)
@@ -27,6 +31,9 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        include_object=include_object,
+        render_item=render_item,
+        process_revision_directives=writer,
         dialect_opts={"paramstyle": "named"},
     )
 
@@ -39,6 +46,9 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_object=include_object,
+        render_item=render_item,
+        process_revision_directives=writer,
     )
 
     with context.begin_transaction():
