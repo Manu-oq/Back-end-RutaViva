@@ -37,6 +37,7 @@ async def generate_itinerary(
         lon=payload.lon,
         radius_meters=payload.radius,
         query_embedding=query_embedding,
+        user_interests_embedding=current_user.tourist_profile.interests_embedding,
     )
 
     if not context_pois:
@@ -46,12 +47,9 @@ async def generate_itinerary(
         )
 
     enriched_query = (
-        f"Solicitud del usuario: {payload.query}
-"
-        f"Fechas del viaje: desde {payload.start_date.isoformat()} hasta {payload.end_date.isoformat()}
-"
-        f"Ubicación de referencia: lat={payload.lat}, lon={payload.lon}
-"
+        f"Solicitud del usuario: {payload.query}\n"
+        f"Fechas del viaje: desde {payload.start_date.isoformat()} hasta {payload.end_date.isoformat()}\n"
+        f"Ubicación de referencia: lat={payload.lat}, lon={payload.lon}\n"
         f"Radio máximo: {payload.radius} metros"
     )
     generated_raw = await llm_service.generate_itinerary(enriched_query, context_pois)

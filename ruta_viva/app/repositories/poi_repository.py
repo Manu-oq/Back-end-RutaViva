@@ -103,12 +103,18 @@ class POIRepository:
         lon: float,
         radius_meters: float,
         query_embedding: list[float],
+        user_interests_embedding: list[float] | None = None,
         limit: int = 5,
     ) -> list[POIResponse]:
         reference_point = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
         poi_geography = cast(POI.location, Geography)
         reference_geography = cast(reference_point, Geography)
-        cosine_distance = POI.description_embedding.cosine_distance(query_embedding)
+        query_distance = POI.description_embedding.cosine_distance(query_embedding)
+        ranking_score = query_distance
+
+        if user_interests_embedding is not None:
+            profile_distance = POI.description_embedding.cosine_distance(user_interests_embedding)
+            ranking_score = (query_distance * 0.7) + (profile_distance * 0.3)
 
         stmt = (
             select(
@@ -116,18 +122,18 @@ class POIRepository:
                 func.ST_Y(POI.location).label("latitude"),
                 func.ST_X(POI.location).label("longitude"),
                 func.ST_Distance(poi_geography, reference_geography).label("distancia_metros"),
-                cosine_distance.label("semantic_distance"),
+                ranking_score.label("ranking_score"),
             )
             .where(func.ST_DWithin(poi_geography, reference_geography, radius_meters))
             .where(POI.description_embedding.is_not(None))
-            .order_by("semantic_distance")
+            .order_by("ranking_score")
             .limit(limit)
         )
 
         result = await db.execute(stmt)
         rows = result.all()
         responses: list[POIResponse] = []
-        for poi, latitude, longitude, distancia_metros, _semantic_distance in rows:
+        for poi, latitude, longitude, distancia_metros, _ranking_score in rows:
             category_ids = await self._get_category_ids(db, poi.id)
             responses.append(
                 POIResponse(

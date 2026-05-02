@@ -13,6 +13,7 @@ from app.schemas.token import TokenPayload
 
 
 security_scheme = HTTPBearer()
+optional_security_scheme = HTTPBearer(auto_error=False)
 user_repository = UserRepository()
 
 
@@ -40,3 +41,22 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+
+async def get_optional_current_user(
+    db: AsyncSession = Depends(get_db),
+    token: HTTPAuthorizationCredentials | None = Depends(optional_security_scheme),
+) -> User | None:
+    if token is None:
+        return None
+
+    try:
+        payload = jwt.decode(token.credentials, settings.secret_key, algorithms=[settings.algorithm])
+        token_data = TokenPayload(sub=payload.get("sub"))
+        if token_data.sub is None:
+            return None
+        user_id = UUID(token_data.sub)
+    except (JWTError, ValueError):
+        return None
+
+    return await user_repository.get_user_by_id(db, user_id)

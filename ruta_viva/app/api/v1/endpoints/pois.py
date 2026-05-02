@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_optional_current_user
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.poi_repository import POIRepository
@@ -43,13 +43,20 @@ async def semantic_search_pois(
     lon: float = Query(...),
     radius: float = Query(5000, gt=0),
     db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
     embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
 ) -> list[POIResponse]:
     query_embedding = await embedding_service.get_embedding(query)
+    user_interests_embedding = (
+        current_user.tourist_profile.interests_embedding
+        if current_user is not None and current_user.tourist_profile is not None
+        else None
+    )
     return await poi_repository.search_hybrid(
         db,
         lat=lat,
         lon=lon,
         radius_meters=radius,
         query_embedding=query_embedding,
+        user_interests_embedding=user_interests_embedding,
     )

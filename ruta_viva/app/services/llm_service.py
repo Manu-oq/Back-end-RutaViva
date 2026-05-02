@@ -54,12 +54,8 @@ Reglas obligatorias:
 """.strip()
 
         user_prompt = (
-            f"Consulta del usuario:
-{user_query}
-
-"
-            f"POIs de contexto (usa solo estos lugares):
-{json.dumps(context_payload, ensure_ascii=False)}"
+            f"Consulta del usuario:\n{user_query}\n\n"
+            f"POIs de contexto (usa solo estos lugares):\n{json.dumps(context_payload, ensure_ascii=False)}"
         )
 
         response = await self.client.chat.completions.create(
