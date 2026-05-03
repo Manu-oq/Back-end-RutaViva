@@ -1,6 +1,6 @@
 # Documentación Técnica Viva — Backend Ruta Viva
 
-> Última actualización integral: **2026-05-02**
+> Última actualización integral: **2026-05-03**
 >
 > Este documento es la memoria técnica acumulativa del backend. No está pensado como resumen ejecutivo corto, sino como una referencia detallada del estado real del sistema, de las decisiones ya tomadas y de los problemas ya resueltos.
 
@@ -61,15 +61,26 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 - aplicación FastAPI funcional,
 - autenticación JWT operativa,
 - acceso protegido a usuario autenticado,
+- perfil turista editable,
+- activación de perfil emprendedor,
 - creación de POIs con embedding automático,
+- listado, edición y eliminación de POIs propios de emprendedores,
 - búsqueda geoespacial,
 - búsqueda semántica/híbrida basada en embeddings OpenAI,
 - generación de itinerarios con DeepSeek,
 - persistencia de itinerarios e itinerarios por pasos,
 - ingesta masiva de POIs reales desde OpenStreetMap/Overpass,
 - sistema de reviews con embeddings semánticos,
-- perfil dinámico de intereses del turista,
+- creación de reviews con respuesta inmediata mediante `BackgroundTasks`,
+- perfil dinámico de intereses del turista actualizado en segundo plano,
 - búsqueda híbrida personalizada por perfil cuando existe usuario autenticado,
+- generación de itinerarios consciente del clima mediante OpenWeatherMap,
+- carga local de imágenes y exposición de `/media`,
+- favoritos/bookmarks de POIs para turistas,
+- telemetría por request con `X-Process-Time`,
+- manejo global uniforme de errores para frontend,
+- seeder idempotente de categorías base,
+- índice vectorial HNSW para acelerar búsqueda semántica,
 - migraciones Alembic operativas,
 - y metadata ORM correctamente registrada para futuras autogeneraciones.
 
@@ -87,29 +98,44 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 ### Autenticación y usuario
 - `POST /api/v1/auth/register` crea usuario turista.
 - `POST /api/v1/auth/login` emite JWT bearer.
-- `GET /api/v1/users/me` retorna el usuario autenticado.
+- `GET /api/v1/users/me` retorna el usuario autenticado con perfiles turista/emprendedor cuando existen.
+- `PUT /api/v1/users/me/tourist-profile` actualiza preferencias reales del turista.
+- `POST /api/v1/users/me/entrepreneur-profile` activa perfil emprendedor.
 - la autenticación usa `HTTPBearer` + validación JWT con `python-jose`.
 
 ### POIs
 - `POST /api/v1/pois/` crea POIs autenticados.
+- `GET /api/v1/pois/mine` lista POIs del emprendedor autenticado.
+- `PUT /api/v1/pois/{poi_id}` edita POIs propios y recalcula embedding si cambia nombre/descripción.
+- `DELETE /api/v1/pois/{poi_id}` elimina POIs propios.
+- `PATCH /api/v1/pois/{poi_id}/media` asocia URLs de imagen a `POI.multimedia_urls`.
 - en la creación se genera automáticamente `description_embedding` con OpenAI.
 - `GET /api/v1/pois/search` hace búsqueda geográfica por radio.
 - `GET /api/v1/pois/semantic-search` hace búsqueda híbrida actual: filtro por radio + ranking semántico por cosine distance.
+- `GET /api/v1/pois/{poi_id}` entrega el detalle serializado de un POI para pantallas frontend de detalle.
+- `GET /api/v1/categories/` expone la taxonomía base sembrada de categorías.
 
 ### Reviews y perfil dinámico
 - `POST /api/v1/reviews/` permite a turistas autenticados crear valoraciones.
-- cada review genera un embedding del texto con OpenAI.
-- la review se persiste con `text_embedding`.
-- el perfil del turista se actualiza en `tourist_profiles.interests_embedding` usando media móvil exponencial.
+- la respuesta HTTP de creación de review es inmediata: primero se guarda la reseña con `text_embedding=None`.
+- luego FastAPI ejecuta una `BackgroundTasks` que genera el embedding OpenAI del texto.
+- esa tarea en segundo plano actualiza `reviews.text_embedding` y `tourist_profiles.interests_embedding`.
+- el perfil del turista se actualiza con media móvil exponencial.
 - `GET /api/v1/reviews/poi/{poi_id}` permite ver reseñas de un POI específico.
+- `GET /api/v1/reviews/poi/{poi_id}/summary` entrega promedio, total y distribución.
+- `PUT /api/v1/reviews/{review_id}` y `DELETE /api/v1/reviews/{review_id}` permiten gestionar reviews propias.
 
 ### Itinerarios
 - `POST /api/v1/itineraries/generate` genera un itinerario turístico con DeepSeek.
-- el endpoint:
+- `GET /api/v1/itineraries/` lista los itinerarios persistidos del turista autenticado.
+- `GET /api/v1/itineraries/{itinerary_id}` devuelve un itinerario persistido por ID validando propiedad del turista.
+- el endpoint de generación:
   - recibe consulta de usuario + coordenadas + radio + fechas,
   - genera embedding de la query con OpenAI,
   - recupera POIs relevantes con `POIRepository.search_hybrid`,
-  - envía esos POIs a DeepSeek bajo un prompt estricto,
+  - consulta OpenWeatherMap mediante `weather_service.get_forecast`,
+  - envía POIs + pronóstico climático a DeepSeek bajo un prompt estricto,
+  - instruye al LLM a priorizar actividades indoor cuando hay lluvia y outdoor cuando el clima es favorable,
   - valida el JSON devuelto,
   - verifica que el LLM no inventó POIs fuera del contexto,
   - persiste `Itinerary` e `ItineraryStep`,
@@ -121,7 +147,7 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 - no hay tests automatizados todavía.
 - no hay autorización fina por roles más allá de checks puntuales.
 - no existe aún pipeline RAG completo de ingesta, chunking, retrieval y respuesta final.
-- no hay observabilidad formal, métricas ni tracing.
+- no hay tracing distribuido ni dashboard formal de observabilidad, pero sí existe telemetría básica por request con logs y `X-Process-Time`.
 - no hay capa formal de service/orchestration para todos los casos de uso; parte de la lógica sigue en endpoints y repositories.
 
 ---
@@ -154,6 +180,14 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 - proveedor de chat actual: **DeepSeek**.
 - integración hecha usando `AsyncOpenAI` con `base_url=settings.deepseek_base_url`.
 - modelo usado: **`deepseek-chat`**.
+
+### Clima para itinerarios
+- proveedor actual: **OpenWeatherMap**.
+- endpoint usado: `/data/2.5/forecast`.
+- cliente HTTP async: **httpx**.
+- configuración: `OPENWEATHER_API_KEY` cargada como `settings.openweather_api_key`.
+- salida interna: string compacto para LLM, por ejemplo `Viernes 01: Lluvia ligera, 12°C, probabilidad de lluvia 70%.`
+- uso: antes de generar itinerario se obtiene el pronóstico con las coordenadas del usuario y se incorpora al prompt de DeepSeek.
 
 ### Decisión ya tomada
 Se eliminó el soporte a Gemini como proveedor de embeddings.
@@ -659,6 +693,12 @@ Observación importante:
 - contrato esperado desde el LLM,
 - estructura intermedia validada antes de persistir en DB.
 
+`ItineraryStepResponse` enriquece cada paso persistido con:
+- `poi_nombre`
+- `poi_descripcion`
+
+Estos campos se derivan de la relación `ItineraryStep.poi` y existen para que el frontend pueda mostrar nombres reales de lugares sin hacer una request adicional por cada `poi_id`.
+
 ---
 
 ## 13. Repositorios actuales
@@ -815,6 +855,21 @@ Flujo:
 3. si falla devuelve `401 Incorrect email or password`,
 4. si pasa, retorna token bearer.
 
+
+
+## 15.3.1 Perfil turista y emprendedor
+Archivos:
+- `app/api/v1/endpoints/users.py`
+- `app/repositories/user_repository.py`
+
+Endpoints:
+- `GET /api/v1/users/me` devuelve usuario con `tourist_profile` y `entrepreneur_profile`.
+- `PUT /api/v1/users/me/tourist-profile` actualiza `full_name`, `has_own_transport` y `system_preferences`.
+- `POST /api/v1/users/me/entrepreneur-profile` crea/actualiza perfil emprendedor.
+
+Uso principal:
+- permitir que el frontend edite preferencias reales y active flujo emprendedor sin crear una cuenta separada.
+
 ## 15.4 `GET /api/v1/users/me`
 Archivo:
 - `app/api/v1/endpoints/users.py`
@@ -872,7 +927,71 @@ Flujo:
 3. filtra por radio y rankea por distancia semántica coseno,
 4. devuelve POIs relevantes.
 
-## 15.8 `POST /api/v1/itineraries/generate`
+## 15.8 `GET /api/v1/pois/{poi_id}`
+Archivo:
+- `app/api/v1/endpoints/pois.py`
+
+Path params:
+- `poi_id`
+
+Flujo:
+1. no requiere autenticación,
+2. busca el POI por UUID,
+3. reconstruye `POIResponse` con `latitude`, `longitude` y `category_ids`,
+4. devuelve `404 POI not found.` si el UUID no existe.
+
+Uso principal:
+- soportar la pantalla de detalle del frontend cuando el POI no está ya cargado en memoria desde el mapa.
+
+
+
+## 15.8.1 `PATCH /api/v1/pois/{poi_id}/media`
+Archivo:
+- `app/api/v1/endpoints/pois.py`
+
+Body esperado:
+- `image_url`
+
+Flujo:
+1. exige usuario autenticado,
+2. valida que el POI exista,
+3. si el POI tiene `entrepreneur_id`, exige que coincida con el usuario actual,
+4. agrega la URL a `multimedia_urls.gallery`,
+5. usa la URL como `cover` si el POI no tenía portada,
+6. devuelve el `POIResponse` actualizado.
+
+Uso principal:
+- asociar al POI la URL devuelta por `POST /api/v1/media/upload`.
+
+## 15.8.2 `GET /api/v1/categories/`
+Archivo:
+- `app/api/v1/endpoints/categories.py`
+
+Flujo:
+1. no requiere autenticación,
+2. lee `categories` ordenadas por ID,
+3. devuelve `id`, `name` e `icon_url`.
+
+Uso principal:
+- reemplazar categorías hardcodeadas del frontend.
+
+
+
+## 15.8.3 POIs propios de emprendedor
+Archivo:
+- `app/api/v1/endpoints/pois.py`
+
+Endpoints:
+- `GET /api/v1/pois/mine` lista POIs cuyo `entrepreneur_id` coincide con el usuario autenticado.
+- `PUT /api/v1/pois/{poi_id}` edita campos principales, ubicación y categorías.
+- `DELETE /api/v1/pois/{poi_id}` elimina el POI propio.
+
+Reglas:
+- requieren `entrepreneur_profile`,
+- solo el dueño puede editar/eliminar,
+- si cambia nombre o descripción se recalcula `description_embedding`.
+
+## 15.9 `POST /api/v1/itineraries/generate`
 Archivo:
 - `app/api/v1/endpoints/itineraries.py`
 
@@ -897,12 +1016,39 @@ Flujo completo:
 10. si el LLM inventó lugares devuelve `502`,
 11. si el LLM no devolvió pasos devuelve `502`,
 12. persiste `Itinerary` e `ItineraryStep`,
-13. retorna `ItineraryResponse` completo.
+13. recarga pasos con su POI asociado,
+14. retorna `ItineraryResponse` completo, incluyendo `poi_nombre` y `poi_descripcion` por paso.
 
 
----
+## 15.9.1 `GET /api/v1/itineraries/`
+Archivo:
+- `app/api/v1/endpoints/itineraries.py`
 
-## 15.9 `POST /api/v1/reviews/`
+Flujo:
+1. exige usuario autenticado,
+2. exige `tourist_profile`,
+3. consulta `ItineraryRepository.list_itineraries_by_tourist(...)`,
+4. filtra por `tourist_id=current_user.id`,
+5. devuelve itinerarios con pasos ordenados y datos básicos del POI (`poi_nombre`, `poi_descripcion`).
+
+Uso principal:
+- alimentar el historial de itinerarios del frontend.
+
+## 15.9.2 `GET /api/v1/itineraries/{itinerary_id}`
+Archivo:
+- `app/api/v1/endpoints/itineraries.py`
+
+Flujo:
+1. exige usuario autenticado,
+2. exige `tourist_profile`,
+3. busca por `itinerary_id` y `tourist_id=current_user.id`,
+4. devuelve `404 Itinerary not found.` cuando no existe o no pertenece al usuario,
+5. devuelve `ItineraryResponse` enriquecido cuando existe.
+
+Uso principal:
+- permitir que el frontend abra un detalle persistido por URL/ID sin depender del estado en memoria.
+
+## 15.10 `POST /api/v1/reviews/`
 Archivo:
 - `app/api/v1/endpoints/reviews.py`
 
@@ -927,7 +1073,7 @@ Flujo completo:
 ### Importancia técnica
 Este endpoint es la primera feature donde una acción explícita del usuario modifica su representación semántica interna. La review no solo queda como contenido histórico; también se convierte en señal vectorial para personalización.
 
-## 15.10 `GET /api/v1/reviews/poi/{poi_id}`
+## 15.11 `GET /api/v1/reviews/poi/{poi_id}`
 Archivo:
 - `app/api/v1/endpoints/reviews.py`
 
@@ -939,7 +1085,27 @@ Flujo:
 
 Este endpoint es público y sirve para visualizar la reputación/opiniones asociadas a un lugar.
 
-## 15.11 Búsqueda semántica personalizada
+
+
+## 15.11.1 `GET /api/v1/reviews/poi/{poi_id}/summary`
+Archivo:
+- `app/api/v1/endpoints/reviews.py`
+
+Devuelve:
+- `average_rating`
+- `total_reviews`
+- `rating_distribution`
+
+## 15.11.2 `PUT /api/v1/reviews/{review_id}` y `DELETE /api/v1/reviews/{review_id}`
+Archivo:
+- `app/api/v1/endpoints/reviews.py`
+
+Reglas:
+- requieren turista autenticado,
+- solo el dueño de la review puede editar/eliminar,
+- al editar texto se reinicia `text_embedding` y se agenda enriquecimiento semántico en background.
+
+## 15.12 Búsqueda semántica personalizada
 Archivo:
 - `app/repositories/poi_repository.py`
 - `app/api/v1/endpoints/pois.py`
@@ -964,7 +1130,7 @@ Donde:
 
 Como son distancias, menor score significa mejor ranking.
 
-## 15.12 Itinerarios con retrieval personalizado
+## 15.13 Itinerarios con retrieval personalizado
 Archivo:
 - `app/api/v1/endpoints/itineraries.py`
 
@@ -976,6 +1142,23 @@ user_interests_embedding=current_user.tourist_profile.interests_embedding
 
 Esto significa que los POIs que entran como contexto para DeepSeek ya no dependen solo de la consulta puntual, sino también del perfil aprendido del turista. Por lo tanto, el grounding del itinerario queda personalizado.
 
+
+
+
+## 15.14 Bookmarks de POIs
+Archivos:
+- `app/api/v1/endpoints/bookmarks.py`
+- `app/repositories/bookmark_repository.py`
+
+Endpoints:
+- `GET /api/v1/bookmarks/` lista POIs favoritos del turista.
+- `GET /api/v1/bookmarks/{poi_id}` devuelve estado booleano.
+- `POST /api/v1/bookmarks/{poi_id}` guarda favorito idempotente.
+- `DELETE /api/v1/bookmarks/{poi_id}` quita favorito.
+
+Reglas:
+- requieren turista autenticado,
+- usan la restricción única `(tourist_id, poi_id)` como garantía de no duplicados.
 
 ## 16. Búsqueda geográfica y semántica
 
@@ -1650,19 +1833,215 @@ con body compatible con `GenerateItineraryRequest`.
 - `alembic upgrade head` vuelve a correr correctamente.
 
 
+### [2026-05-02] Carga local de imágenes y servicio `/media`
+
+#### Objetivo
+- permitir subir imágenes sin contratar almacenamiento cloud en esta etapa,
+- persistir archivos locales entre reinicios del contenedor,
+- guardar URLs relativas en `POI.multimedia_urls`.
+
+#### Cambios realizados
+- se creó la carpeta `ruta_viva/media`,
+- `app/main.py` monta `StaticFiles` en `/media`,
+- se creó `app/services/image_service.py`,
+- se creó endpoint `POST /api/v1/media/upload`,
+- se agregó router `media` a `app/api/v1/api.py`,
+- `docker-compose.yml` monta `./media:/app/media` para persistencia.
+
+#### Reglas implementadas
+- solo se aceptan JPG y PNG,
+- límite máximo de 5 MB,
+- nombre único con `uuid4`,
+- retorno de URL relativa como `/media/nombre_unico.jpg`.
+
+#### Estado resultante
+- el frontend puede subir imágenes localmente,
+- las URLs generadas pueden guardarse en `multimedia_urls`,
+- los archivos no se pierden al reiniciar el contenedor si se usa el volumen configurado.
+
+---
+
+### [2026-05-02] FASE 6 — Consciencia climática en itinerarios
+
+#### Objetivo
+- hacer que el itinerario no dependa solo de intención semántica y distancia,
+- incorporar clima real como contexto de generación,
+- evitar recomendar actividades al aire libre en momentos de lluvia cuando existan alternativas más protegidas.
+
+#### Cambios realizados
+- se agregó `httpx` a `requirements.txt`,
+- se agregó `openweather_api_key` a `app/core/config.py`,
+- se creó `app/services/weather_service.py`,
+- `POST /api/v1/itineraries/generate` ahora consulta pronóstico antes de llamar a DeepSeek,
+- `ItineraryGenerator.generate_itinerary` ahora recibe `weather_forecast`,
+- el prompt de DeepSeek incluye reglas explícitas de clima.
+
+#### Diseño del servicio de clima
+`weather_service.get_forecast(lat, lon)`:
+
+1. valida que exista `OPENWEATHER_API_KEY`,
+2. llama a OpenWeatherMap `/data/2.5/forecast`,
+3. usa `units=metric` y `lang=es`,
+4. agrupa los bloques de 3 horas por día,
+5. elige como resumen diario el bloque más cercano al mediodía,
+6. calcula probabilidad máxima de lluvia del día,
+7. devuelve un string compacto legible para IA.
+
+#### Decisión técnica
+El clima se pasa como contexto textual al LLM, no como regla rígida en SQL. Esto mantiene el backend flexible: la base recupera lugares y el LLM razona el orden del itinerario considerando clima, fechas e intención.
+
+#### Estado resultante
+- los itinerarios generados pueden mencionar en `ai_context.reason` por qué el clima influyó,
+- actividades indoor se priorizan ante lluvia,
+- actividades outdoor se favorecen cuando el pronóstico es despejado.
+
+---
+
+### [2026-05-02] Telemetría, seeder e ingesta OSM robustecida
+
+#### Objetivo
+- preparar el backend para mediciones de tesis y futura integración frontend,
+- estabilizar datos base,
+- hacer la ingesta masiva más resiliente para 10.000 registros.
+
+#### Cambios realizados
+- `app/main.py` incorporó middleware de telemetría con `time.perf_counter()`,
+- cada respuesta incluye header `X-Process-Time`,
+- los logs registran método, ruta, status code y tiempo en ms,
+- `app/db/session.py` incorporó `BASE_CATEGORIES` e `init_db()`,
+- `scripts/seed_categories.py` permite asegurar categorías base manualmente,
+- el `lifespan` de FastAPI llama `init_db()` al iniciar,
+- `scripts/import_osm_data.py` aumentó timeout Overpass a 300 segundos,
+- la ingesta ahora usa checkpoint para omitir POIs OSM ya importados con embedding,
+- la ingesta muestra ETA basado en progreso real.
+
+#### Categorías base
+- `1`: Naturaleza
+- `2`: Gastronomía
+- `3`: Turismo
+- `4`: Alojamiento
+- `5`: Cultura
+
+#### Decisión técnica
+`init_db()` usa insert idempotente con `ON CONFLICT` y luego sincroniza la secuencia con `setval(...)`. Esto evita errores por IDs manuales y permite ejecutar el seeder muchas veces sin duplicar datos.
+
+#### Estado resultante
+- se pueden medir latencias reales endpoint por endpoint,
+- las categorías base quedan consistentes,
+- la ingesta grande se puede retomar sin pagar nuevamente embeddings ya generados.
+
+---
+
+### [2026-05-02] Optimización vectorial, background tasks y exception handlers
+
+#### Objetivo
+- mejorar performance semántica,
+- reducir latencia percibida al crear reviews,
+- entregar errores limpios y consistentes para frontend.
+
+#### Cambios realizados
+- se creó `scripts/create_vector_indices.py`,
+- se definió índice HNSW sobre `pois.description_embedding`,
+- se usa `vector_cosine_ops` como métrica,
+- `POST /api/v1/reviews/` ahora guarda la review inmediatamente,
+- la generación del embedding de review y actualización del perfil se ejecuta en `BackgroundTasks`,
+- `app/main.py` agregó handlers para `HTTPException`, `RequestValidationError` y `Exception`.
+
+#### SQL del índice
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pois_description_embedding_hnsw
+ON pois
+USING hnsw (description_embedding vector_cosine_ops);
+```
+
+#### Por qué HNSW y no IVFFlat para este caso
+HNSW es conveniente porque:
+
+- no requiere fase previa de entrenamiento del índice,
+- mantiene buen recall en búsqueda aproximada de vecinos más cercanos,
+- funciona bien cuando los datos crecen incrementalmente,
+- evita tener que calibrar listas/probes desde el inicio,
+- se adapta mejor a un backend en evolución con ingesta OSM, POIs nuevos y reseñas.
+
+IVFFlat puede funcionar bien en datasets enormes y más estáticos, pero requiere entrenamiento y ajuste más cuidadoso. Para Ruta Viva, HNSW es más robusto operacionalmente en esta etapa.
+
+#### Formato global de errores
+```json
+{
+  "error": "Tipo de Error",
+  "detail": "Mensaje legible"
+}
+```
+
+Los errores 401, 404 y 422 mantienen su status code correcto, pero ahora se devuelven con estructura más predecible para frontend.
+
+#### Estado resultante
+- búsqueda vectorial preparada para mayor volumen,
+- reviews con mejor UX,
+- frontend puede tratar errores de forma uniforme,
+- la tesis puede medir latencia con mayor claridad.
+
+---
+
+### [2026-05-02] Endpoint de detalle de POI para integración frontend
+
+#### Objetivo
+- permitir que el frontend abra una pantalla de detalle de POI aunque el punto no esté en el estado local del mapa.
+
+#### Cambios realizados
+- se agregó `POIRepository.get_poi_by_id(...)`,
+- se agregó `GET /api/v1/pois/{poi_id}`,
+- se mantuvo el endpoint después de rutas estáticas como `/search` y `/semantic-search` para evitar conflictos de matching en FastAPI,
+- se documentó el endpoint dentro del catálogo de rutas.
+
+#### Estado resultante
+- el frontend puede listar POIs con `/pois/search` o `/pois/semantic-search`,
+- y puede recuperar el detalle directamente por UUID con `/pois/{poi_id}`.
+
+---
+
+### [2026-05-02] Enriquecimiento de itinerarios para frontend
+
+#### Objetivo
+- evitar que el frontend muestre solo UUIDs de POI en la pantalla de itinerario generado.
+
+#### Cambios realizados
+- `ItineraryStepResponse` incorporó `poi_nombre` y `poi_descripcion`,
+- `ItineraryRepository.get_itinerary_by_id()` ahora usa `selectinload(Itinerary.steps).selectinload(ItineraryStep.poi)`,
+- la respuesta se construye explícitamente para incluir datos básicos del POI asociado a cada paso.
+
+#### Estado resultante
+- `POST /api/v1/itineraries/generate` sigue persistiendo los mismos datos relacionales,
+- pero la respuesta HTTP ya viene lista para UI narrativa con nombres reales de lugares.
+
+---
+
 ## 24. Estado final al cierre de esta actualización
 Hoy el backend puede:
 
 - autenticar usuarios,
 - identificar al usuario actual,
 - crear POIs con embedding automático,
+- listar, editar y eliminar POIs propios de emprendedores,
+- asociar imágenes persistentes a POIs,
+- listar categorías base,
+- actualizar perfil turista y activar perfil emprendedor,
 - buscar POIs por cercanía,
 - buscar POIs por intención semántica dentro de un radio,
 - personalizar búsquedas semánticas con perfil dinámico cuando hay turista autenticado,
-- crear reviews con embeddings semánticos,
-- actualizar el perfil de intereses del turista con cada review,
-- generar itinerarios con contexto recuperado y personalizado,
+- crear reviews con confirmación inmediata y enriquecimiento semántico en background,
+- editar/eliminar reviews propias y exponer resumen agregado por POI,
+- actualizar el perfil de intereses del turista con cada review procesada,
+- generar itinerarios con contexto recuperado, personalizado y consciente del clima,
 - persistir itinerarios y pasos,
+- listar itinerarios del turista autenticado,
+- recuperar detalle de itinerario por ID validando propiedad,
+- guardar y quitar POIs favoritos de turistas,
+- subir imágenes locales y servirlas desde `/media`,
+- medir latencia por request con `X-Process-Time`,
+- entregar errores uniformes al frontend,
+- asegurar categorías base de forma idempotente,
+- usar índice HNSW para acelerar búsqueda vectorial,
 - mantener su esquema versionado con Alembic sobre una metadata ORM correctamente registrada,
 - e importar masivamente POIs reales desde OpenStreetMap para enriquecer el contexto del sistema.
 
@@ -1671,6 +2050,69 @@ La siguiente gran etapa natural del proyecto sería profundizar:
 - tests automatizados,
 - services de aplicación más ricos,
 - ranking híbrido más avanzado,
-- endpoints para editar/eliminar reviews,
-- métricas agregadas por POI,
+- moderación/paginación de reviews,
+- métricas agregadas más avanzadas por POI,
+- job queue persistente tipo Celery/RQ/Arq si las background tasks crecen,
+- dashboard formal de observabilidad,
 - y evolución hacia RAG completo.
+
+
+---
+
+### [2026-05-03] Endpoints de historial y detalle persistido de itinerarios
+
+#### Objetivo
+- soportar desde backend el historial de itinerarios del turista y la apertura de un detalle persistido por ID desde frontend.
+
+#### Cambios realizados
+- `GET /api/v1/itineraries/` lista itinerarios del turista autenticado.
+- `GET /api/v1/itineraries/{itinerary_id}` devuelve detalle validando que pertenezca al usuario actual.
+- `ItineraryRepository.get_itinerary_by_id(...)` acepta `tourist_id` opcional y retorna `None` si no existe o no pertenece al turista.
+- se agregó `ItineraryRepository.list_itineraries_by_tourist(...)` con carga eager de pasos y POIs.
+- la conversión a `ItineraryResponse` quedó centralizada en `_to_response(...)` para reutilizar enriquecimiento `poi_nombre`/`poi_descripcion`.
+
+#### Estado resultante
+- el frontend puede listar itinerarios guardados,
+- puede abrir detalles por ID sin depender de memoria local,
+- y las respuestas siguen protegidas por autenticación + propiedad del turista.
+
+
+---
+
+### [2026-05-03] Categorías, media persistente, reviews avanzadas y bookmarks
+
+#### Objetivo
+- habilitar el segundo bloque de 4 conexiones frontend-backend.
+
+#### Cambios realizados
+- se agregó `GET /api/v1/categories/` para exponer categorías base.
+- se agregó `PATCH /api/v1/pois/{poi_id}/media` para persistir URLs de imagen en `POI.multimedia_urls`.
+- se agregaron schemas y endpoints de resumen, edición y eliminación de reviews.
+- se creó `BookmarkRepository` y endpoints `GET/POST/DELETE /api/v1/bookmarks`.
+- `api_router` registra `categories` y `bookmarks`.
+
+#### Estado resultante
+- el frontend ya no necesita categorías hardcodeadas,
+- las imágenes subidas pueden quedar asociadas a POIs,
+- las reviews propias pueden gestionarse,
+- y turistas pueden guardar POIs favoritos.
+
+
+---
+
+### [2026-05-03] Perfil editable, emprendedor y POIs propios
+
+#### Objetivo
+- exponer soporte backend para las 3 partes funcionales restantes del frontend.
+
+#### Cambios realizados
+- `UserResponse` ahora incluye `tourist_profile` y `entrepreneur_profile`.
+- se agregó `TouristProfileUpdate` y `EntrepreneurProfileResponse/Create`.
+- `PUT /users/me/tourist-profile` actualiza preferencias reales.
+- `POST /users/me/entrepreneur-profile` activa perfil emprendedor.
+- `GET /pois/mine` lista POIs propios.
+- `PUT /pois/{poi_id}` edita POIs propios y recalcula embedding si corresponde.
+- `DELETE /pois/{poi_id}` elimina POIs propios.
+
+#### Estado resultante
+- el frontend puede editar perfil turista, activar modo emprendedor y gestionar POIs propios.
