@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 import app.db.models  # noqa: F401
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, init_db
 from app.models.category import Category
 from app.models.poi import POI
 from app.repositories.poi_repository import POIRepository
@@ -24,7 +25,7 @@ from app.schemas.poi import POICreate
 from app.services.embedding_service import get_embedding_service
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-OVERPASS_TIMEOUT_SECONDS = 180
+OVERPASS_TIMEOUT_SECONDS = 300
 EMBEDDING_DELAY_SECONDS = 0.5
 DEFAULT_LIMIT = 1000
 DEFAULT_BATCH_SIZE = 10
@@ -40,12 +41,31 @@ FOOD_AMENITIES = {
     "ice_cream",
 }
 NATURAL_FEATURES = {"beach", "water", "peak"}
+LODGING_TOURISM = {
+    "hotel",
+    "hostel",
+    "guest_house",
+    "apartment",
+    "camp_site",
+    "caravan_site",
+    "wilderness_hut",
+    "chalet",
+}
+CULTURE_TOURISM = {
+    "museum",
+    "gallery",
+    "artwork",
+    "attraction",
+    "theme_park",
+    "viewpoint",
+}
 
 DEFAULT_CATEGORIES = {
     1: "Naturaleza",
     2: "Gastronomía",
     3: "Turismo",
-    4: "Recreación",
+    4: "Alojamiento",
+    5: "Cultura",
 }
 
 logger = logging.getLogger("osm_import")
@@ -195,6 +215,8 @@ async def fetch_osm_elements(limit: int) -> list[dict[str, Any]]:
 
 
 async def ensure_categories() -> dict[str, int]:
+    await init_db()
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Category).order_by(Category.id))
         categories = list(result.scalars().all())
@@ -282,16 +304,21 @@ def infer_access_type(tags: dict[str, str]) -> str:
 
 def infer_category_names(tags: dict[str, str]) -> list[str]:
     category_names: list[str] = []
+    tourism = tags.get("tourism")
 
     if tags.get("natural") in NATURAL_FEATURES:
         category_names.append("Naturaleza")
     if tags.get("leisure") == "park":
-        category_names.append("Recreación")
         if "Naturaleza" not in category_names:
             category_names.append("Naturaleza")
+        category_names.append("Turismo")
     if tags.get("amenity") in FOOD_AMENITIES:
         category_names.append("Gastronomía")
-    if tags.get("tourism"):
+    if tourism in LODGING_TOURISM:
+        category_names.append("Alojamiento")
+    elif tourism in CULTURE_TOURISM:
+        category_names.append("Cultura")
+    elif tourism:
         category_names.append("Turismo")
 
     if not category_names:
@@ -402,7 +429,7 @@ def build_place(element: dict[str, Any]) -> OSMPlace | None:
     )
 
 
-async def osm_poi_already_imported(db, place: OSMPlace) -> bool:
+async def osm_poi_with_embedding_already_imported(db, place: OSMPlace) -> bool:
     stmt = select(POI.id).where(
         POI.multimedia_urls.contains(
             {
@@ -411,9 +438,31 @@ async def osm_poi_already_imported(db, place: OSMPlace) -> bool:
                 "osm_id": place.osm_id,
             }
         )
-    )
+    ).where(POI.description_embedding.is_not(None))
     result = await db.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+
+    minutes, remaining_seconds = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds}s"
+
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes}m"
+
+
+def calculate_eta(started_at: float, processed: int, total: int) -> str:
+    if processed <= 0:
+        return "calculando"
+
+    elapsed = time.perf_counter() - started_at
+    average_seconds_per_item = elapsed / processed
+    remaining_items = max(total - processed, 0)
+    return format_duration(average_seconds_per_item * remaining_items)
 
 
 async def import_place(
@@ -422,13 +471,18 @@ async def import_place(
     total: int,
     category_map: dict[str, int],
     rate_limiter: EmbeddingRateLimiter,
+    started_at: float,
 ) -> bool:
-    logger.info("Importando %s/%s: %s...", position, total, place.name)
+    eta = calculate_eta(started_at, position - 1, total)
+    logger.info("Importando %s/%s: %s... ETA: %s", position, total, place.name, eta)
 
     try:
         async with AsyncSessionLocal() as db:
-            if await osm_poi_already_imported(db, place):
-                logger.info("Omitido (ya existía por OSM source): %s", place.name)
+            if await osm_poi_with_embedding_already_imported(db, place):
+                logger.info(
+                    "Checkpoint: omitido porque ya tenía embedding generado: %s",
+                    place.name,
+                )
                 return False
 
         await rate_limiter.wait_turn()
@@ -495,6 +549,7 @@ async def process_places(elements: list[dict[str, Any]], batch_size: int, limit:
 
     imported = 0
     not_imported = 0
+    started_at = time.perf_counter()
 
     for batch_start in range(0, total, batch_size):
         batch = places[batch_start : batch_start + batch_size]
@@ -505,12 +560,23 @@ async def process_places(elements: list[dict[str, Any]], batch_size: int, limit:
                 total=total,
                 category_map=category_map,
                 rate_limiter=rate_limiter,
+                started_at=started_at,
             )
             for index, place in enumerate(batch)
         ]
         results = await asyncio.gather(*tasks)
         imported += sum(1 for result in results if result)
         not_imported += sum(1 for result in results if not result)
+
+        processed = min(batch_start + len(batch), total)
+        logger.info(
+            "Progreso: %s/%s procesados | nuevos: %s | omitidos/fallidos: %s | ETA: %s",
+            processed,
+            total,
+            imported,
+            not_imported,
+            calculate_eta(started_at, processed, total),
+        )
 
     logger.info(
         "Ingesta finalizada. Importados nuevos: %s | Omitidos o fallidos: %s",
