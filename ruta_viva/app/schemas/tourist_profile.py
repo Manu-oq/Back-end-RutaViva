@@ -14,6 +14,12 @@ class TouristProfileCreate(TouristProfileBase):
     pass
 
 
+class TouristProfileUpdate(BaseModel):
+    full_name: str | None = None
+    has_own_transport: bool | None = None
+    system_preferences: dict[str, Any] | None = None
+
+
 class TouristProfileResponse(TouristProfileBase):
     user_id: UUID
 
