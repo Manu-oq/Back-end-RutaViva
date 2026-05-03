@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.itinerary import Itinerary
 from app.models.itinerary_step import ItineraryStep
-from app.schemas.itinerary import GeneratedItinerary, ItineraryResponse
+from app.schemas.itinerary import GeneratedItinerary, ItineraryResponse, ItineraryStepResponse
 
 
 class ItineraryRepository:
@@ -51,14 +51,67 @@ class ItineraryRepository:
             await db.rollback()
             raise
 
-        return await self.get_itinerary_by_id(db, itinerary.id)
+        itinerary_response = await self.get_itinerary_by_id(db, itinerary.id)
+        if itinerary_response is None:
+            raise RuntimeError("Generated itinerary was persisted but could not be reloaded.")
 
-    async def get_itinerary_by_id(self, db: AsyncSession, itinerary_id: UUID) -> ItineraryResponse:
+        return itinerary_response
+
+    async def get_itinerary_by_id(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID | None = None,
+    ) -> ItineraryResponse | None:
         stmt = (
             select(Itinerary)
-            .options(selectinload(Itinerary.steps))
+            .options(selectinload(Itinerary.steps).selectinload(ItineraryStep.poi))
             .where(Itinerary.id == itinerary_id)
         )
+        if tourist_id is not None:
+            stmt = stmt.where(Itinerary.tourist_id == tourist_id)
+
         result = await db.execute(stmt)
-        itinerary = result.scalar_one()
-        return ItineraryResponse.model_validate(itinerary)
+        itinerary = result.scalar_one_or_none()
+        if itinerary is None:
+            return None
+
+        return self._to_response(itinerary)
+
+    async def list_itineraries_by_tourist(
+        self,
+        db: AsyncSession,
+        tourist_id: UUID,
+    ) -> list[ItineraryResponse]:
+        stmt = (
+            select(Itinerary)
+            .options(selectinload(Itinerary.steps).selectinload(ItineraryStep.poi))
+            .where(Itinerary.tourist_id == tourist_id)
+            .order_by(Itinerary.start_date.desc().nullslast(), Itinerary.title.asc())
+        )
+        result = await db.execute(stmt)
+        return [self._to_response(itinerary) for itinerary in result.scalars().all()]
+
+    def _to_response(self, itinerary: Itinerary) -> ItineraryResponse:
+        return ItineraryResponse(
+            id=itinerary.id,
+            tourist_id=itinerary.tourist_id,
+            title=itinerary.title,
+            start_date=itinerary.start_date,
+            end_date=itinerary.end_date,
+            status=itinerary.status,
+            steps=[
+                ItineraryStepResponse(
+                    id=step.id,
+                    itinerary_id=step.itinerary_id,
+                    poi_id=step.poi_id,
+                    poi_nombre=step.poi.name if step.poi is not None else None,
+                    poi_descripcion=step.poi.description if step.poi is not None else None,
+                    step_order=step.step_order,
+                    arrival_time=step.arrival_time,
+                    departure_time=step.departure_time,
+                    ai_context=step.ai_context,
+                )
+                for step in itinerary.steps
+            ],
+        )

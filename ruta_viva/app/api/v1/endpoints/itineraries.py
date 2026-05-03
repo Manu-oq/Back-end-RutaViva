@@ -1,3 +1,6 @@
+from uuid import UUID
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,11 +12,29 @@ from app.repositories.poi_repository import POIRepository
 from app.schemas.itinerary import GenerateItineraryRequest, GeneratedItinerary, ItineraryResponse
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 from app.services.llm_service import ItineraryGenerator, get_itinerary_generator
+from app.services.weather_service import get_forecast
 
 
 router = APIRouter(tags=["itineraries"])
 poi_repository = POIRepository()
 itinerary_repository = ItineraryRepository()
+
+
+@router.get("/", response_model=list[ItineraryResponse])
+async def list_my_itineraries(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ItineraryResponse]:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can list itineraries.",
+        )
+
+    return await itinerary_repository.list_itineraries_by_tourist(
+        db,
+        tourist_id=current_user.id,
+    )
 
 
 @router.post("/generate", response_model=ItineraryResponse, status_code=status.HTTP_201_CREATED)
@@ -52,7 +73,25 @@ async def generate_itinerary(
         f"Ubicación de referencia: lat={payload.lat}, lon={payload.lon}\n"
         f"Radio máximo: {payload.radius} metros"
     )
-    generated_raw = await llm_service.generate_itinerary(enriched_query, context_pois)
+
+    try:
+        weather_forecast = await get_forecast(payload.lat, payload.lon)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Weather forecast provider failed while generating the itinerary.",
+        ) from exc
+
+    generated_raw = await llm_service.generate_itinerary(
+        enriched_query,
+        context_pois,
+        weather_forecast,
+    )
     generated_itinerary = GeneratedItinerary.model_validate(generated_raw)
 
     valid_poi_ids = {poi.id for poi in context_pois}
@@ -76,3 +115,29 @@ async def generate_itinerary(
         end_date=payload.end_date,
         generated_itinerary=generated_itinerary,
     )
+
+
+@router.get("/{itinerary_id}", response_model=ItineraryResponse)
+async def get_my_itinerary(
+    itinerary_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ItineraryResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can read itineraries.",
+        )
+
+    itinerary = await itinerary_repository.get_itinerary_by_id(
+        db,
+        itinerary_id=itinerary_id,
+        tourist_id=current_user.id,
+    )
+    if itinerary is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Itinerary not found.",
+        )
+
+    return itinerary

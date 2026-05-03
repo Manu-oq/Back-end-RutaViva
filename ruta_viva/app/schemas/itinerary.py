@@ -34,6 +34,8 @@ class ItineraryStepResponse(BaseModel):
     id: UUID
     itinerary_id: UUID
     poi_id: UUID
+    poi_nombre: str | None = None
+    poi_descripcion: str | None = None
     step_order: int
     arrival_time: datetime | None = None
     departure_time: datetime | None = None

@@ -20,7 +20,12 @@ class ItineraryGenerator:
         )
         self.model = "deepseek-chat"
 
-    async def generate_itinerary(self, user_query: str, context_pois: list[POIResponse]) -> dict:
+    async def generate_itinerary(
+        self,
+        user_query: str,
+        context_pois: list[POIResponse],
+        weather_forecast: str,
+    ) -> dict:
         context_payload = [poi.model_dump(mode="json") for poi in context_pois]
 
         system_prompt = """
@@ -51,10 +56,15 @@ Reglas obligatorias:
 }
 5. Si hay pocos lugares buenos, devuelve menos pasos en vez de inventar.
 6. El itinerario debe ser coherente con la intención del usuario y con un recorrido turístico por La Araucanía.
+7. Se te proporcionará el pronóstico del clima para los días del viaje.
+8. Debes priorizar actividades bajo techo o más protegidas en momentos de lluvia, viento fuerte o frío intenso.
+9. Debes dejar las actividades al aire libre para momentos despejados o con clima más favorable.
+10. En ai_context.reason menciona brevemente por qué el clima influyó en la decisión cuando sea relevante.
 """.strip()
 
         user_prompt = (
             f"Consulta del usuario:\n{user_query}\n\n"
+            f"Pronóstico del clima para el viaje:\n{weather_forecast}\n\n"
             f"POIs de contexto (usa solo estos lugares):\n{json.dumps(context_payload, ensure_ascii=False)}"
         )
 
