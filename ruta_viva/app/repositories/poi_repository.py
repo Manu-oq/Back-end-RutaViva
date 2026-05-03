@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.poi import POI
 from app.models.poi_category import POICategory
-from app.schemas.poi import POICreate, POIResponse
+from app.schemas.poi import POICreate, POIResponse, POIUpdate
 
 
 def from_text(wkt: str, srid: int) -> WKTElement:
@@ -51,6 +51,113 @@ class POIRepository:
             raise
 
         return await self._get_poi_response_by_id(db, poi.id)
+
+    async def update_poi(
+        self,
+        db: AsyncSession,
+        poi_id: UUID,
+        poi_in: POIUpdate,
+        embedding: list[float] | None = None,
+    ) -> POIResponse | None:
+        poi = await db.get(POI, poi_id)
+        if poi is None:
+            return None
+
+        if poi_in.nombre is not None:
+            poi.name = poi_in.nombre
+        if poi_in.descripcion is not None:
+            poi.description = poi_in.descripcion
+        if embedding is not None:
+            poi.description_embedding = embedding
+        if poi_in.tipo_acceso is not None:
+            poi.access_type = poi_in.tipo_acceso
+        if poi_in.telefono_publico is not None:
+            poi.contact_phone = poi_in.telefono_publico
+        if poi_in.email_publico is not None:
+            poi.contact_email = poi_in.email_publico
+        if poi_in.latitude is not None and poi_in.longitude is not None:
+            poi.location = from_text(f"POINT({poi_in.longitude} {poi_in.latitude})", srid=4326)
+
+        try:
+            if poi_in.category_ids is not None:
+                await db.execute(delete(POICategory).where(POICategory.poi_id == poi_id))
+                for category_id in poi_in.category_ids:
+                    db.add(POICategory(poi_id=poi_id, category_id=category_id))
+
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+        return await self._get_poi_response_by_id(db, poi_id)
+
+    async def delete_poi(self, db: AsyncSession, poi_id: UUID) -> bool:
+        poi = await db.get(POI, poi_id)
+        if poi is None:
+            return False
+
+        try:
+            await db.delete(poi)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+        return True
+
+    async def get_pois_by_entrepreneur(
+        self,
+        db: AsyncSession,
+        entrepreneur_id: UUID,
+    ) -> list[POIResponse]:
+        stmt = (
+            select(
+                POI,
+                func.ST_Y(POI.location).label("latitude"),
+                func.ST_X(POI.location).label("longitude"),
+            )
+            .where(POI.entrepreneur_id == entrepreneur_id)
+            .order_by(POI.name.asc())
+        )
+        result = await db.execute(stmt)
+        responses: list[POIResponse] = []
+        for poi, latitude, longitude in result.all():
+            category_ids = await self._get_category_ids(db, poi.id)
+            responses.append(
+                POIResponse(
+                    id=poi.id,
+                    nombre=poi.name,
+                    descripcion=poi.description,
+                    tipo_acceso=poi.access_type,
+                    telefono_publico=poi.contact_phone,
+                    email_publico=poi.contact_email,
+                    multimedia_urls=poi.multimedia_urls,
+                    category_ids=category_ids,
+                    latitude=float(latitude),
+                    longitude=float(longitude),
+                )
+            )
+        return responses
+
+    async def append_media_url(
+        self,
+        db: AsyncSession,
+        poi_id: UUID,
+        image_url: str,
+    ) -> POIResponse | None:
+        poi = await db.get(POI, poi_id)
+        if poi is None:
+            return None
+
+        poi.multimedia_urls = self._append_image_to_media(poi.multimedia_urls, image_url)
+
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+        return await self._get_poi_response_by_id(db, poi_id)
 
     async def get_pois_nearby(
         self,
@@ -149,8 +256,37 @@ class POIRepository:
                     longitude=float(longitude),
                     distancia_metros=float(distancia_metros) if distancia_metros is not None else None,
                 )
-            )
+        )
         return responses
+
+    async def get_poi_by_id(self, db: AsyncSession, poi_id: UUID) -> POIResponse | None:
+        stmt = select(
+            POI,
+            func.ST_Y(POI.location).label("latitude"),
+            func.ST_X(POI.location).label("longitude"),
+        ).where(POI.id == poi_id)
+        result = await db.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            return None
+
+        poi, latitude, longitude = row
+        category_ids = await self._get_category_ids(db, poi.id)
+        return POIResponse(
+            id=poi.id,
+            nombre=poi.name,
+            descripcion=poi.description,
+            tipo_acceso=poi.access_type,
+            telefono_publico=poi.contact_phone,
+            email_publico=poi.contact_email,
+            multimedia_urls=poi.multimedia_urls,
+            category_ids=category_ids,
+            latitude=float(latitude),
+            longitude=float(longitude),
+        )
+
+    async def get_poi_model_by_id(self, db: AsyncSession, poi_id: UUID) -> POI | None:
+        return await db.get(POI, poi_id)
 
     async def _get_poi_response_by_id(self, db: AsyncSession, poi_id: UUID) -> POIResponse:
         stmt = select(
@@ -179,3 +315,33 @@ class POIRepository:
         stmt = select(POICategory.category_id).where(POICategory.poi_id == poi_id)
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    def _append_image_to_media(
+        self,
+        media: object,
+        image_url: str,
+    ) -> dict[str, object] | list[object]:
+        if isinstance(media, list):
+            updated = list(media)
+            if image_url not in updated:
+                updated.append(image_url)
+            return updated
+
+        if isinstance(media, dict):
+            gallery = media.get("gallery")
+            if not isinstance(gallery, list):
+                gallery = []
+
+            if image_url not in gallery:
+                gallery.append(image_url)
+
+            updated = dict(media)
+            updated["gallery"] = gallery
+            if not updated.get("cover"):
+                updated["cover"] = image_url
+            return updated
+
+        return {
+            "cover": image_url,
+            "gallery": [image_url],
+        }

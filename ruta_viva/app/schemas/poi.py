@@ -10,13 +10,28 @@ class POIBase(BaseModel):
     tipo_acceso: str
     telefono_publico: str | None = None
     email_publico: str | None = None
-    multimedia_urls: dict[str, Any] | None = None
+    multimedia_urls: dict[str, Any] | list[Any] | None = None
     category_ids: list[int] = Field(default_factory=list)
 
 
 class POICreate(POIBase):
     latitude: float
     longitude: float
+
+
+class POIUpdate(BaseModel):
+    nombre: str | None = None
+    descripcion: str | None = None
+    tipo_acceso: str | None = None
+    telefono_publico: str | None = None
+    email_publico: str | None = None
+    category_ids: list[int] | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class POIMediaAppend(BaseModel):
+    image_url: str
 
 
 class POIResponse(POIBase):
