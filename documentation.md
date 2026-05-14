@@ -207,14 +207,19 @@ Back-end-TT/
 ├── README.md
 ├── documentation.md
 ├── estudio.md
+├── .env.example
 ├── ruta_viva/
 │   ├── alembic.ini
 │   ├── docker-compose.yml
 │   ├── Dockerfile
 │   ├── Dockerfile.db
 │   ├── requirements.txt
+│   ├── .gitignore
 │   ├── scripts/
-│   │   └── init_db.sql
+│   │   ├── init_db.sql
+│   │   ├── create_vector_indices.py
+│   │   ├── import_osm_data.py
+│   │   └── seed_categories.py
 │   ├── migrations/
 │   │   ├── README
 │   │   ├── env.py
@@ -229,8 +234,12 @@ Back-end-TT/
 │       │       ├── api.py
 │       │       └── endpoints/
 │       │           ├── auth.py
+│       │           ├── bookmarks.py
+│       │           ├── categories.py
 │       │           ├── itineraries.py
+│       │           ├── media.py
 │       │           ├── pois.py
+│       │           ├── reviews.py
 │       │           └── users.py
 │       ├── core/
 │       │   ├── config.py
@@ -251,20 +260,29 @@ Back-end-TT/
 │       │   ├── tourist_profile.py
 │       │   └── user.py
 │       ├── repositories/
+│       │   ├── bookmark_repository.py
 │       │   ├── itinerary_repository.py
 │       │   ├── poi_repository.py
+│       │   ├── review_repository.py
 │       │   └── user_repository.py
 │       ├── schemas/
+│       │   ├── bookmark.py
+│       │   ├── category.py
+│       │   ├── entrepreneur_profile.py
 │       │   ├── itinerary.py
+│       │   ├── media.py
 │       │   ├── poi.py
+│       │   ├── review.py
 │       │   ├── token.py
 │       │   ├── tourist_profile.py
 │       │   └── user.py
 │       └── services/
 │           ├── embedding_service.py
 │           ├── geo_service.py
+│           ├── image_service.py
 │           ├── llm_service.py
-│           └── rag_service.py
+│           ├── rag_service.py
+│           └── weather_service.py
 └── fastapi/
     └── ... entorno virtual local previo ...
 ```
@@ -377,6 +395,8 @@ postgresql+asyncpg://<user>:<password>@<host>:<port>/<db>
 ## 7.4 Variables mínimas esperables en `.env`
 No se documentan secretos reales, pero conceptualmente hoy se esperan al menos:
 
+> **SECRET_KEY es REQUERIDO.** No tiene valor por defecto. Si no se define en `.env`, Pydantic falla en startup con `ValidationError`. Las demas claves (OpenAI, DeepSeek, OpenWeather) son optativas y el sistema degrada gracefulmente cuando no estan presentes.
+
 ```env
 POSTGRES_USER=admin
 POSTGRES_PASSWORD=admin
@@ -426,6 +446,7 @@ Hay autenticación funcional, pero autorización fina aún parcial.
 - `GET /users/me` solo exige usuario autenticado.
 - `POST /pois/` exige usuario autenticado, pero no impone formalmente que deba ser emprendedor; si el usuario tiene `entrepreneur_profile`, se usa como `entrepreneur_id`, y si no, queda `None`.
 - `POST /itineraries/generate` sí valida específicamente que `current_user.tourist_profile is not None`.
+- `POST /api/v1/media/upload` ahora requiere usuario autenticado vía `Depends(get_current_user)` (anteriormente era público).
 
 Esto muestra que la autorización por rol todavía está en etapa intermedia.
 
@@ -2116,3 +2137,29 @@ La siguiente gran etapa natural del proyecto sería profundizar:
 
 #### Estado resultante
 - el frontend puede editar perfil turista, activar modo emprendedor y gestionar POIs propios.
+
+
+### [2026-05-03] Limpieza de infraestructura y seguridad del backend
+
+#### Objetivo
+- endurecer la seguridad del backend antes de continuar con features,
+- eliminar secretos hardcodeados del repositorio,
+- corregir `.gitignore` para evitar filtraciones accidentales,
+- proteger endpoints de upload que estaban públicos.
+
+#### Cambios realizados
+1. `.gitignore` reescrito completamente para ignorar `__pycache__/`, `*.pyc`, `.env`, `.venv/`, `venv/`, `fastapi/`, `media/`, `.direnv/`, `.vscode/`, `.idea/`, `.pytest_cache/`, `.ruff_cache/`, `.coverage`, `build/`, `dist/`, `*.egg-info/`, `.DS_Store`.
+2. `.env` eliminado del control de versiones (`git rm --cached`). Creado `.env.example` con placeholders seguros para todas las claves. El historial previo no se limpió (pendiente post-rotación de keys).
+3. `config.py:20` — `secret_key` pasó de tener un valor hardcodeado a ser **requerido** (sin default). Si no se setea `SECRET_KEY` en `.env`, Pydantic falla en startup con `ValidationError`.
+4. `POST /api/v1/media/upload` ahora requiere autenticación JWT (`Depends(get_current_user)`). Antes cualquier request podía subir archivos al servidor.
+5. Se reorganizaron 14 commits del sprint en features: categories, pois CRUD, reviews complete, media auth, itineraries history, users profiles, bookmarks, scripts.
+
+#### Archivos creados/modificados
+- `ruta_viva/.gitignore`
+- `ruta_viva/.env.example`
+- `ruta_viva/app/core/config.py`
+- `ruta_viva/app/api/v1/endpoints/media.py`
+
+#### Estado resultante
+- backend más seguro: sin secretos en el repo, sin endpoint de upload público, sin `.env` versionado.
+- `SECRET_KEY` es ahora un requisito explícito en startup (fail-fast si falta).

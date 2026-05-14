@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,11 +7,26 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     api_v1_prefix: str = "/api/v1"
 
-    postgres_user: str = "admin"
-    postgres_password: str = "admin"
-    postgres_db: str = "rutaviva_db"
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_user: str = Field(
+        default="admin",
+        validation_alias=AliasChoices("POSTGRES_USER", "postgres_user"),
+    )
+    postgres_password: str = Field(
+        default="admin",
+        validation_alias=AliasChoices("POSTGRES_PASSWORD", "postgres_password"),
+    )
+    postgres_db: str = Field(
+        default="rutaviva_db",
+        validation_alias=AliasChoices("POSTGRES_DB", "postgres_db"),
+    )
+    postgres_host: str = Field(
+        default="localhost",
+        validation_alias=AliasChoices("POSTGRES_HOST", "postgres_host"),
+    )
+    postgres_port: int = Field(
+        default=5432,
+        validation_alias=AliasChoices("POSTGRES_PORT", "postgres_port"),
+    )
 
     openai_api_key: str | None = None
     deepseek_api_key: str | None = None
