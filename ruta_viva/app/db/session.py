@@ -14,6 +14,16 @@ BASE_CATEGORIES = [
     {"id": 3, "name": "Turismo", "icon_url": None},
     {"id": 4, "name": "Alojamiento", "icon_url": None},
     {"id": 5, "name": "Cultura", "icon_url": None},
+    {"id": 6, "name": "Trekking/Senderismo", "icon_url": None},
+    {"id": 7, "name": "Lagos/Ríos/Playas", "icon_url": None},
+    {"id": 8, "name": "Montañas/Volcanes/Miradores", "icon_url": None},
+    {"id": 9, "name": "Termas/Bienestar", "icon_url": None},
+    {"id": 10, "name": "Parques/Reservas", "icon_url": None},
+    {"id": 11, "name": "Museos/Patrimonio", "icon_url": None},
+    {"id": 12, "name": "Aventura/Deportes", "icon_url": None},
+    {"id": 13, "name": "Servicios turísticos/Información", "icon_url": None},
+    {"id": 14, "name": "Transporte/Accesos", "icon_url": None},
+    {"id": 15, "name": "Artesanía/Compras locales", "icon_url": None},
 ]
 
 

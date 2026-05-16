@@ -11,7 +11,7 @@ from app.models.user import User
 from app.schemas.entrepreneur_profile import EntrepreneurProfileCreate
 from app.schemas.tourist_profile import TouristProfileCreate
 from app.schemas.tourist_profile import TouristProfileUpdate
-from app.schemas.user import UserCreate
+from app.schemas.user import UserCreate, UserUpdate
 
 
 class UserRepository:
@@ -36,6 +36,38 @@ class UserRepository:
             .where(User.email == email)
         )
         return result.scalar_one_or_none()
+
+    async def update_user(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        user_in: UserUpdate,
+    ) -> User | None:
+        user = await db.get(User, user_id)
+        if user is None:
+            return None
+
+        if user_in.email is not None:
+            user.email = str(user_in.email)
+        if user_in.avatar_url is not None:
+            user.avatar_url = user_in.avatar_url
+        if user_in.display_name is not None:
+            tourist_profile = await db.get(TouristProfile, user_id)
+            if tourist_profile is not None:
+                tourist_profile.full_name = user_in.display_name
+
+            entrepreneur_profile = await db.get(EntrepreneurProfile, user_id)
+            if entrepreneur_profile is not None:
+                admin_data = dict(entrepreneur_profile.admin_data or {})
+                admin_data["display_name"] = user_in.display_name
+                entrepreneur_profile.admin_data = admin_data
+
+        try:
+            await db.commit()
+            return await self.get_user_by_id(db, user_id)
+        except Exception:
+            await db.rollback()
+            raise
 
     async def create_tourist_user(
         self,

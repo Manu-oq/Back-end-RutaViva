@@ -7,7 +7,7 @@ from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.entrepreneur_profile import EntrepreneurProfileCreate, EntrepreneurProfileResponse
 from app.schemas.tourist_profile import TouristProfileResponse, TouristProfileUpdate
-from app.schemas.user import UserResponse
+from app.schemas.user import UserResponse, UserUpdate
 
 
 router = APIRouter(tags=["users"])
@@ -17,6 +17,30 @@ user_repository = UserRepository()
 @router.get("/me", response_model=UserResponse)
 async def read_current_user(current_user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_current_user(
+    payload: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> UserResponse:
+    if payload.email is not None and payload.email != current_user.email:
+        existing_user = await user_repository.get_user_by_email(db, str(payload.email))
+        if existing_user is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
+
+    updated_user = await user_repository.update_user(db, current_user.id, payload)
+    if updated_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    return UserResponse.model_validate(updated_user)
 
 
 @router.put("/me/tourist-profile", response_model=TouristProfileResponse)

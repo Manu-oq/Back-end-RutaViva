@@ -36,6 +36,8 @@ class POIRepository:
             contact_phone=poi_in.telefono_publico,
             contact_email=poi_in.email_publico,
             multimedia_urls=poi_in.multimedia_urls,
+            opening_hours_text=poi_in.opening_hours_text,
+            visit_rules=poi_in.visit_rules,
         )
         db.add(poi)
 
@@ -75,6 +77,10 @@ class POIRepository:
             poi.contact_phone = poi_in.telefono_publico
         if poi_in.email_publico is not None:
             poi.contact_email = poi_in.email_publico
+        if poi_in.opening_hours_text is not None:
+            poi.opening_hours_text = poi_in.opening_hours_text
+        if poi_in.visit_rules is not None:
+            poi.visit_rules = poi_in.visit_rules
         if poi_in.latitude is not None and poi_in.longitude is not None:
             poi.location = from_text(f"POINT({poi_in.longitude} {poi_in.latitude})", srid=4326)
 
@@ -132,6 +138,8 @@ class POIRepository:
                     telefono_publico=poi.contact_phone,
                     email_publico=poi.contact_email,
                     multimedia_urls=poi.multimedia_urls,
+                    opening_hours_text=poi.opening_hours_text,
+                    visit_rules=poi.visit_rules,
                     category_ids=category_ids,
                     latitude=float(latitude),
                     longitude=float(longitude),
@@ -195,6 +203,8 @@ class POIRepository:
                     telefono_publico=poi.contact_phone,
                     email_publico=poi.contact_email,
                     multimedia_urls=poi.multimedia_urls,
+                    opening_hours_text=poi.opening_hours_text,
+                    visit_rules=poi.visit_rules,
                     category_ids=category_ids,
                     latitude=float(latitude),
                     longitude=float(longitude),
@@ -251,6 +261,8 @@ class POIRepository:
                     telefono_publico=poi.contact_phone,
                     email_publico=poi.contact_email,
                     multimedia_urls=poi.multimedia_urls,
+                    opening_hours_text=poi.opening_hours_text,
+                    visit_rules=poi.visit_rules,
                     category_ids=category_ids,
                     latitude=float(latitude),
                     longitude=float(longitude),
@@ -280,10 +292,47 @@ class POIRepository:
             telefono_publico=poi.contact_phone,
             email_publico=poi.contact_email,
             multimedia_urls=poi.multimedia_urls,
+            opening_hours_text=poi.opening_hours_text,
+            visit_rules=poi.visit_rules,
             category_ids=category_ids,
             latitude=float(latitude),
             longitude=float(longitude),
         )
+
+    async def get_pois_by_ids(self, db: AsyncSession, poi_ids: list[UUID]) -> list[POIResponse]:
+        if not poi_ids:
+            return []
+
+        stmt = select(
+            POI,
+            func.ST_Y(POI.location).label("latitude"),
+            func.ST_X(POI.location).label("longitude"),
+        ).where(POI.id.in_(poi_ids))
+        result = await db.execute(stmt)
+        rows = result.all()
+        order_by_id = {poi_id: index for index, poi_id in enumerate(poi_ids)}
+
+        responses: list[POIResponse] = []
+        for poi, latitude, longitude in sorted(rows, key=lambda row: order_by_id.get(row[0].id, len(order_by_id))):
+            category_ids = await self._get_category_ids(db, poi.id)
+            responses.append(
+                POIResponse(
+                    id=poi.id,
+                    nombre=poi.name,
+                    descripcion=poi.description,
+                    tipo_acceso=poi.access_type,
+                    telefono_publico=poi.contact_phone,
+                    email_publico=poi.contact_email,
+                    multimedia_urls=poi.multimedia_urls,
+                    opening_hours_text=poi.opening_hours_text,
+                    visit_rules=poi.visit_rules,
+                    category_ids=category_ids,
+                    latitude=float(latitude),
+                    longitude=float(longitude),
+                )
+            )
+
+        return responses
 
     async def get_poi_model_by_id(self, db: AsyncSession, poi_id: UUID) -> POI | None:
         return await db.get(POI, poi_id)
@@ -306,6 +355,8 @@ class POIRepository:
             telefono_publico=poi.contact_phone,
             email_publico=poi.contact_email,
             multimedia_urls=poi.multimedia_urls,
+            opening_hours_text=poi.opening_hours_text,
+            visit_rules=poi.visit_rules,
             category_ids=category_ids,
             latitude=float(latitude),
             longitude=float(longitude),

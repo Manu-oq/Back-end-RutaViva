@@ -6,13 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_optional_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.repositories.entrepreneur_repository import EntrepreneurRepository
 from app.repositories.poi_repository import POIRepository
+from app.schemas.entrepreneur import POIVisitCreate, POIVisitResponse
 from app.schemas.poi import POICreate, POIMediaAppend, POIResponse, POIUpdate
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 
 
 router = APIRouter(tags=["pois"])
 poi_repository = POIRepository()
+entrepreneur_repository = EntrepreneurRepository()
 
 
 def _ensure_can_manage_poi(current_user: User, entrepreneur_id: UUID | None) -> None:
@@ -112,6 +115,24 @@ async def get_poi_detail(
         )
 
     return poi
+
+
+@router.post("/{poi_id}/visit", response_model=POIVisitResponse, status_code=status.HTTP_201_CREATED)
+async def record_poi_visit(
+    poi_id: UUID,
+    payload: POIVisitCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
+) -> POIVisitResponse:
+    visit = await entrepreneur_repository.record_poi_visit(
+        db,
+        poi_id=poi_id,
+        visitor_id=current_user.id if current_user is not None else None,
+        visit_in=payload,
+    )
+    if visit is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="POI not found.")
+    return visit
 
 
 @router.patch("/{poi_id}/media", response_model=POIResponse)

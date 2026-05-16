@@ -11,6 +11,8 @@ class POIBase(BaseModel):
     telefono_publico: str | None = None
     email_publico: str | None = None
     multimedia_urls: dict[str, Any] | list[Any] | None = None
+    opening_hours_text: str | None = None
+    visit_rules: dict[str, Any] | None = None
     category_ids: list[int] = Field(default_factory=list)
 
 
@@ -25,6 +27,8 @@ class POIUpdate(BaseModel):
     tipo_acceso: str | None = None
     telefono_publico: str | None = None
     email_publico: str | None = None
+    opening_hours_text: str | None = None
+    visit_rules: dict[str, Any] | None = None
     category_ids: list[int] | None = None
     latitude: float | None = None
     longitude: float | None = None

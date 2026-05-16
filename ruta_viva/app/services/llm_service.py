@@ -25,6 +25,7 @@ class ItineraryGenerator:
         user_query: str,
         context_pois: list[POIResponse],
         weather_forecast: str,
+        schedule_guidance: str,
     ) -> dict:
         context_payload = [poi.model_dump(mode="json") for poi in context_pois]
 
@@ -60,11 +61,19 @@ Reglas obligatorias:
 8. Debes priorizar actividades bajo techo o más protegidas en momentos de lluvia, viento fuerte o frío intenso.
 9. Debes dejar las actividades al aire libre para momentos despejados o con clima más favorable.
 10. En ai_context.reason menciona brevemente por qué el clima influyó en la decisión cuando sea relevante.
+11. Se te proporcionarán reglas de visita por POI cuando existan: opening_hours_text y visit_rules.
+12. No uses oficinas, CONAF o centros de información como parada turística principal salvo que el usuario lo pida explícitamente.
+13. No inventes horarios. Si no hay horario conocido, aplica criterio conservador y explica la recomendación.
+14. Si visit_rules.requires_daylight=true, programa ese POI con luz de día y evita tarde/noche salvo que exista regla conocida que lo permita.
+15. Si visit_rules.night_suitable=true, puedes usar ese POI en tarde/noche si encaja con la intención del usuario.
+16. Evita baches grandes sin explicación; usa bloques de mañana, almuerzo, tarde y noche opcional según la guía de horarios.
+17. Para itinerarios generados debes incluir arrival_time y departure_time en cada paso; usa null solo si hay una razón fuerte.
 """.strip()
 
         user_prompt = (
             f"Consulta del usuario:\n{user_query}\n\n"
             f"Pronóstico del clima para el viaje:\n{weather_forecast}\n\n"
+            f"Guía de horarios y slots:\n{schedule_guidance}\n\n"
             f"POIs de contexto (usa solo estos lugares):\n{json.dumps(context_payload, ensure_ascii=False)}"
         )
 

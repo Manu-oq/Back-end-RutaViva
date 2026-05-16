@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.entrepreneur_post import EntrepreneurPost
     from app.models.poi import POI
     from app.models.user import User
 
@@ -26,3 +27,4 @@ class EntrepreneurProfile(Base):
 
     user: Mapped[User] = relationship(back_populates="entrepreneur_profile", lazy="selectin")
     pois: Mapped[list[POI]] = relationship(back_populates="entrepreneur", lazy="noload")
+    posts: Mapped[list[EntrepreneurPost]] = relationship(back_populates="entrepreneur", lazy="noload")

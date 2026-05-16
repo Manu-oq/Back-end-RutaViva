@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GenerateItineraryRequest(BaseModel):
@@ -14,6 +14,17 @@ class GenerateItineraryRequest(BaseModel):
     radius: float = Field(default=5000, gt=0)
     start_date: date
     end_date: date
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "GenerateItineraryRequest":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+
+        trip_days = (self.end_date - self.start_date).days + 1
+        if trip_days > 7:
+            raise ValueError("Itinerary generation supports a maximum range of 7 days.")
+
+        return self
 
 
 class GeneratedItineraryStep(BaseModel):
@@ -42,6 +53,17 @@ class ItineraryStepResponse(BaseModel):
     ai_context: dict[str, Any] | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ItineraryStepUpdate(BaseModel):
+    poi_id: UUID | None = None
+    arrival_time: datetime | None = None
+    departure_time: datetime | None = None
+    ai_context: dict[str, Any] | None = None
+
+
+class ReorderItineraryStepsRequest(BaseModel):
+    step_ids: list[UUID] = Field(min_length=1)
 
 
 class ItineraryResponse(BaseModel):

@@ -41,6 +41,13 @@ FOOD_AMENITIES = {
     "ice_cream",
 }
 NATURAL_FEATURES = {"beach", "water", "peak"}
+WATER_NATURAL_FEATURES = {"beach", "water"}
+PEAK_NATURAL_FEATURES = {"peak"}
+INFORMATION_TOURISM = {"information"}
+TREKKING_TOURISM = {"trail", "hiking", "route"}
+THERMAL_KEYWORDS = {"terma", "termas", "thermal", "hot spring", "spa"}
+TRANSPORT_AMENITIES = {"bus_station", "ferry_terminal", "parking", "taxi"}
+CRAFT_AMENITIES = {"marketplace"}
 LODGING_TOURISM = {
     "hotel",
     "hostel",
@@ -57,8 +64,8 @@ CULTURE_TOURISM = {
     "artwork",
     "attraction",
     "theme_park",
-    "viewpoint",
 }
+VIEWPOINT_TOURISM = {"viewpoint"}
 
 DEFAULT_CATEGORIES = {
     1: "Naturaleza",
@@ -66,6 +73,16 @@ DEFAULT_CATEGORIES = {
     3: "Turismo",
     4: "Alojamiento",
     5: "Cultura",
+    6: "Trekking/Senderismo",
+    7: "Lagos/Ríos/Playas",
+    8: "Montañas/Volcanes/Miradores",
+    9: "Termas/Bienestar",
+    10: "Parques/Reservas",
+    11: "Museos/Patrimonio",
+    12: "Aventura/Deportes",
+    13: "Servicios turísticos/Información",
+    14: "Transporte/Accesos",
+    15: "Artesanía/Compras locales",
 }
 
 logger = logging.getLogger("osm_import")
@@ -85,6 +102,8 @@ class OSMPlace:
     phone: str | None
     email: str | None
     multimedia_urls: dict[str, Any] | None
+    opening_hours_text: str | None
+    visit_rules: dict[str, Any] | None
     category_names: list[str]
     raw_tags: dict[str, str]
 
@@ -305,19 +324,44 @@ def infer_access_type(tags: dict[str, str]) -> str:
 def infer_category_names(tags: dict[str, str]) -> list[str]:
     category_names: list[str] = []
     tourism = tags.get("tourism")
+    amenity = tags.get("amenity")
+    natural = tags.get("natural")
+    name = clean_text(tags.get("name")) or ""
+    lower_name = name.lower()
 
-    if tags.get("natural") in NATURAL_FEATURES:
+    if natural in NATURAL_FEATURES:
         category_names.append("Naturaleza")
     if tags.get("leisure") == "park":
         if "Naturaleza" not in category_names:
             category_names.append("Naturaleza")
-        category_names.append("Turismo")
-    if tags.get("amenity") in FOOD_AMENITIES:
+        category_names.append("Parques/Reservas")
+    if natural in WATER_NATURAL_FEATURES:
+        category_names.append("Lagos/Ríos/Playas")
+    if natural in PEAK_NATURAL_FEATURES:
+        category_names.append("Montañas/Volcanes/Miradores")
+    if "volc" in lower_name or "mirador" in lower_name:
+        category_names.append("Montañas/Volcanes/Miradores")
+    if "lago" in lower_name or "playa" in lower_name or "río" in lower_name or "rio" in lower_name:
+        category_names.append("Lagos/Ríos/Playas")
+    if "sendero" in lower_name or "trekking" in lower_name:
+        category_names.append("Trekking/Senderismo")
+    if any(keyword in lower_name for keyword in THERMAL_KEYWORDS):
+        category_names.append("Termas/Bienestar")
+    if amenity in FOOD_AMENITIES:
         category_names.append("Gastronomía")
+    if amenity in TRANSPORT_AMENITIES:
+        category_names.append("Transporte/Accesos")
+    if amenity in CRAFT_AMENITIES or "artesanía" in lower_name or "artesania" in lower_name:
+        category_names.append("Artesanía/Compras locales")
+    if tourism in INFORMATION_TOURISM or "conaf" in lower_name or "información" in lower_name or "informacion" in lower_name:
+        category_names.append("Servicios turísticos/Información")
     if tourism in LODGING_TOURISM:
         category_names.append("Alojamiento")
     elif tourism in CULTURE_TOURISM:
+        category_names.append("Museos/Patrimonio")
         category_names.append("Cultura")
+    elif tourism in VIEWPOINT_TOURISM:
+        category_names.append("Montañas/Volcanes/Miradores")
     elif tourism:
         category_names.append("Turismo")
 
@@ -329,6 +373,58 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
         if name not in deduped:
             deduped.append(name)
     return deduped
+
+
+def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]) -> dict[str, Any]:
+    lower_name = name.lower()
+    rules: dict[str, Any] = {
+        "is_primary_experience": True,
+        "requires_daylight": False,
+        "night_suitable": False,
+        "latest_recommended_start_time": None,
+        "access_notes": None,
+        "confidence": "inferred",
+    }
+
+    if "Servicios turísticos/Información" in category_names:
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": False,
+                "night_suitable": False,
+                "latest_recommended_start_time": "17:00",
+                "access_notes": "Centro u oficina informativa: usar como apoyo, no como parada turística principal salvo intención explícita.",
+            }
+        )
+    elif "Termas/Bienestar" in category_names or tags.get("amenity") in FOOD_AMENITIES:
+        rules.update(
+            {
+                "requires_daylight": False,
+                "night_suitable": True,
+                "latest_recommended_start_time": "20:00",
+                "access_notes": "Experiencia potencialmente apta para tarde/noche si el horario informado lo permite.",
+            }
+        )
+    elif (
+        "Montañas/Volcanes/Miradores" in category_names
+        or "Trekking/Senderismo" in category_names
+        or "Parques/Reservas" in category_names
+        or "volc" in lower_name
+        or "sendero" in lower_name
+    ):
+        rules.update(
+            {
+                "requires_daylight": True,
+                "night_suitable": False,
+                "latest_recommended_start_time": "15:30",
+                "access_notes": "Actividad outdoor o de acceso natural: programar con luz de día salvo horario conocido que indique lo contrario.",
+            }
+        )
+
+    if clean_text(tags.get("opening_hours")):
+        rules["confidence"] = "known"
+
+    return rules
 
 
 def describe_place_type(tags: dict[str, str]) -> str:
@@ -412,6 +508,8 @@ def build_place(element: dict[str, Any]) -> OSMPlace | None:
     description = build_description(name, tags)
     phone = clean_text(tags.get("phone") or tags.get("contact:phone"))
     email = clean_text(tags.get("email") or tags.get("contact:email"))
+    opening_hours = clean_text(tags.get("opening_hours"))
+    category_names = infer_category_names(tags)
 
     return OSMPlace(
         osm_id=int(element["id"]),
@@ -424,7 +522,9 @@ def build_place(element: dict[str, Any]) -> OSMPlace | None:
         phone=phone,
         email=email,
         multimedia_urls=build_multimedia_payload(element, tags),
-        category_names=infer_category_names(tags),
+        opening_hours_text=opening_hours,
+        visit_rules=infer_visit_rules(name, tags, category_names),
+        category_names=category_names,
         raw_tags=tags,
     )
 
@@ -499,6 +599,8 @@ async def import_place(
             telefono_publico=place.phone,
             email_publico=place.email,
             multimedia_urls=place.multimedia_urls,
+            opening_hours_text=place.opening_hours_text,
+            visit_rules=place.visit_rules,
             category_ids=category_ids,
             latitude=place.latitude,
             longitude=place.longitude,
