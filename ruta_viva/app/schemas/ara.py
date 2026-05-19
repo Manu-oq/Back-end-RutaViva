@@ -35,6 +35,7 @@ class AraSessionCreate(BaseModel):
     radius: float = Field(default=5000, gt=0)
     start_date: date | None = None
     end_date: date | None = None
+    metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_dates(self) -> "AraSessionCreate":
@@ -46,6 +47,9 @@ class AraSessionCreate(BaseModel):
                 raise ValueError("Ara itinerary generation supports a maximum range of 7 days.")
         if (self.lat is None) != (self.lon is None):
             raise ValueError("lat and lon must be sent together.")
+        if self.metadata and self.metadata.get("intent") == "change_itinerary_step":
+            if not self.metadata.get("itinerary_id") or not self.metadata.get("step_id"):
+                raise ValueError("metadata.itinerary_id and metadata.step_id are required for change_itinerary_step.")
         return self
 
 
@@ -79,3 +83,18 @@ class AraGenerateItineraryResponse(BaseModel):
     session_id: UUID
     status: str
     itinerary: ItineraryResponse
+
+
+class AraGenerateItineraryAcceptedResponse(BaseModel):
+    session_id: UUID
+    status: str
+    generated_itinerary_id: UUID | None = None
+    detail: str
+
+
+class AraGenerationStatusResponse(BaseModel):
+    session_id: UUID
+    status: str
+    generated_itinerary_id: UUID | None = None
+    itinerary: ItineraryResponse | None = None
+    detail: str | None = None

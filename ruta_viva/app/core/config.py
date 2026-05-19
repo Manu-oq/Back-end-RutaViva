@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_timeout_seconds: float = 90.0
+    ara_chat_timeout_seconds: float = 8.0
     openweather_api_key: str | None = None
 
     secret_key: str

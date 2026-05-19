@@ -12,6 +12,8 @@ from app.models.ara_message import AraMessage
 from app.models.ara_session import AraSession
 from app.schemas.ara import AraMessageResponse, AraQuickReply
 
+_UNSET = object()
+
 
 class AraRepository:
     async def create_session(
@@ -89,7 +91,7 @@ class AraRepository:
         intent_data: dict[str, Any] | None = None,
         preferences_data: dict[str, Any] | None = None,
         candidate_poi_ids: list[UUID] | None = None,
-        generated_itinerary_id: UUID | None = None,
+        generated_itinerary_id: UUID | None | object = _UNSET,
     ) -> AraSession:
         if status is not None:
             session.status = status
@@ -99,7 +101,7 @@ class AraRepository:
             session.preferences_data = preferences_data
         if candidate_poi_ids is not None:
             session.candidate_poi_ids = [str(poi_id) for poi_id in candidate_poi_ids]
-        if generated_itinerary_id is not None:
+        if generated_itinerary_id is not _UNSET:
             session.generated_itinerary_id = generated_itinerary_id
         await db.flush()
         return session

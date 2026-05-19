@@ -75,3 +75,16 @@ async def activate_my_entrepreneur_profile(
         profile_in=payload,
     )
     return EntrepreneurProfileResponse.model_validate(entrepreneur_profile)
+
+
+@router.delete("/me/tourist-profile/interests", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_my_interests(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tourist profile not found.",
+        )
+    await user_repository.reset_interests_embedding(db, current_user.tourist_profile.user_id)

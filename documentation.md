@@ -1,6 +1,6 @@
 # Documentación Técnica Viva — Backend Ruta Viva
 
-> Última actualización integral: **2026-05-03**
+> Última actualización integral: **2026-05-18**
 >
 > Este documento es la memoria técnica acumulativa del backend. No está pensado como resumen ejecutivo corto, sino como una referencia detallada del estado real del sistema, de las decisiones ya tomadas y de los problemas ya resueltos.
 
@@ -69,20 +69,35 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 - búsqueda semántica/híbrida basada en embeddings OpenAI,
 - generación de itinerarios con DeepSeek,
 - persistencia de itinerarios e itinerarios por pasos,
+- flujo conversacional de Ara con sesiones, mensajes, quick replies dinámicos y generación final bajo confirmación,
 - ingesta masiva de POIs reales desde OpenStreetMap/Overpass,
 - sistema de reviews con embeddings semánticos,
 - creación de reviews con respuesta inmediata mediante `BackgroundTasks`,
 - perfil dinámico de intereses del turista actualizado en segundo plano,
 - búsqueda híbrida personalizada por perfil cuando existe usuario autenticado,
 - generación de itinerarios consciente del clima mediante OpenWeatherMap,
+- generación de itinerarios multi-día hasta 7 días con normalización de fechas, timezone Chile y metadata `day_index`/`day_date`/`day_label`,
 - carga local de imágenes y exposición de `/media`,
 - favoritos/bookmarks de POIs para turistas,
+- geocoding público para búsqueda de lugares,
+- forecast público diario para frontend,
+- edición de email/avatar/display name del usuario autenticado,
+- métricas, ingresos placeholder, visitas y posts para emprendedores,
 - telemetría por request con `X-Process-Time`,
 - manejo global uniforme de errores para frontend,
 - seeder idempotente de categorías base,
 - índice vectorial HNSW para acelerar búsqueda semántica,
 - migraciones Alembic operativas,
-- y metadata ORM correctamente registrada para futuras autogeneraciones.
+- y metadata ORM correctamente registrada para futuras autogeneraciones,
+- diversificación automática de candidatos en Ara cuando el usuario ya completó una dimensión (evita loops de una sola categoría),
+- reparación determinista de violaciones horarias y saturación categórica en itinerarios generados,
+- validación de horarios de apertura con distinción de "día cerrado" vs "sin datos",
+- sanitización mejorada de metalenguaje técnico y consejos delegados en respuestas del LLM,
+- peso configurable del perfil semántico del usuario en búsqueda híbrida (`profile_weight`), reducido en generación de itinerarios nuevos para evitar contaminación de preferencias antiguas,
+- endpoint de reseteo de perfil semántico (`DELETE /api/v1/users/me/tourist-profile/interests`),
+- hot reload para desarrollo vía volume mount de código y `--reload` en uvicorn,
+- deep copy de preferencias en rama `free_question` para evitar mutaciones accidentales en sesión,
+- limpieza automática de `candidate_poi_ids` y `replacement_context` post-generación y post-reemplazo.
 
 ## 3.2 Funcionalidades ya implementadas y operativas
 ### Infraestructura y arranque
@@ -129,18 +144,40 @@ El backend ya no está solo en fase de arranque. Actualmente dispone de:
 - `POST /api/v1/itineraries/generate` genera un itinerario turístico con DeepSeek.
 - `GET /api/v1/itineraries/` lista los itinerarios persistidos del turista autenticado.
 - `GET /api/v1/itineraries/{itinerary_id}` devuelve un itinerario persistido por ID validando propiedad del turista.
+- `GET /api/v1/itineraries/{itinerary_id}/pois` devuelve solo los POIs del itinerario activo para mapa filtrado.
+- `PATCH /api/v1/itineraries/{itinerary_id}/steps/{step_id}` reemplaza POI o edita horarios/contexto de un paso.
+- `DELETE /api/v1/itineraries/{itinerary_id}/steps/{step_id}` elimina un paso y reordena los restantes.
+- `PATCH /api/v1/itineraries/{itinerary_id}/steps/reorder` reordena steps con `step_ids`.
+- `DELETE /api/v1/itineraries/{itinerary_id}` elimina un itinerario completo del historial del turista.
+- cada `ItineraryStepResponse` incluye `poi_nombre`, `poi_descripcion`, `day_index`, `day_date` y `day_label`.
 - el endpoint de generación:
-  - recibe consulta de usuario + coordenadas + radio + fechas,
+  - recibe consulta de usuario + coordenadas + radio + `start_date`/`end_date`,
+  - trata `start_date` y `end_date` del payload como fuente de verdad por encima de fechas escritas en lenguaje natural,
   - genera embedding de la query con OpenAI,
   - recupera POIs relevantes con `POIRepository.search_hybrid`,
+  - filtra oficinas/servicios de información y alojamientos cuando no fueron pedidos explícitamente,
   - consulta OpenWeatherMap mediante `weather_service.get_forecast`,
-  - envía POIs + pronóstico climático a DeepSeek bajo un prompt estricto,
+  - envía POIs + pronóstico climático + guía de horarios a DeepSeek bajo un prompt estricto,
   - instruye al LLM a priorizar actividades indoor cuando hay lluvia y outdoor cuando el clima es favorable,
+  - exige horarios dentro del rango oficial del viaje y con zona horaria de Chile,
   - valida el JSON devuelto,
   - verifica que el LLM no inventó POIs fuera del contexto,
+  - rechaza pasos fuera de fecha, huecos grandes, alojamientos usados como paradas absurdas y servicios de información usados como atractivos,
+  - sanitiza consejos inútiles que delegan recomendaciones a recepción/CONAF/terceros,
   - persiste `Itinerary` e `ItineraryStep`,
   - y devuelve el itinerario completo guardado.
 
+### Ara conversacional
+- `POST /api/v1/ara/sessions` crea una sesión conversacional desde el input rápido o desde acciones contextuales.
+- `POST /api/v1/ara/sessions/{session_id}/messages` agrega mensajes, avanza el estado conversacional y puede ejecutar reemplazo de step.
+- `GET /api/v1/ara/sessions/{session_id}/messages` recupera historial del chat.
+- `POST /api/v1/ara/sessions/{session_id}/generate-itinerary` genera el itinerario final desde el contexto refinado (síncrono).
+- `POST /api/v1/ara/sessions/{session_id}/generate-itinerary/async` inicia generación en background (respuesta 202, polling vía `/generation-status`).
+- `GET /api/v1/ara/sessions/{session_id}/generation-status` consulta el estado de la generación asíncrona.
+- Ara no genera el itinerario completo en el primer mensaje: primero detecta intención, devuelve respuesta natural y quick replies dinámicos.
+- los quick replies cambian según intención amplia/específica y backend envía el chip `Hazlo todo tú`.
+- si el mensaje incluye `itinerary_id` y `step_id`, Ara interpreta flujo de "Cambiar lugar", sugiere alternativas reales y permite reemplazar la parada.
+- cuando el usuario completa una dimensión (ej: gastronomía), Ara diversifica automáticamente los candidatos y quick replies para evitar loops de una sola categoría.
 ## 3.3 Funcionalidades presentes pero aún incompletas
 - `app/services/geo_service.py` existe pero está vacío.
 - `app/services/rag_service.py` existe pero está vacío.
@@ -219,13 +256,17 @@ Back-end-TT/
 │   │   ├── init_db.sql
 │   │   ├── create_vector_indices.py
 │   │   ├── import_osm_data.py
+│   │   ├── recategorize_pois.py
 │   │   └── seed_categories.py
 │   ├── migrations/
 │   │   ├── README
 │   │   ├── env.py
 │   │   └── versions/
 │   │       ├── 13e4146989e2_initial_schema_with_dynamic_vector_.py
-│   │       └── 82d1bcc33432_fix_poi_description_embedding_openai_1536.py
+│   │       ├── 82d1bcc33432_fix_poi_description_embedding_openai_1536.py
+│   │       ├── 9f4a1b2c3d4e_add_poi_visit_rules_and_extended_categories.py
+│   │       ├── a1b2c3d4e5f6_add_frontend_sync_features.py
+│   │       └── b2c3d4e5f6a7_add_ara_conversation_sessions.py
 │   └── app/
 │       ├── main.py
 │       ├── api/
@@ -233,14 +274,18 @@ Back-end-TT/
 │       │   └── v1/
 │       │       ├── api.py
 │       │       └── endpoints/
+│       │           ├── ara.py
 │       │           ├── auth.py
 │       │           ├── bookmarks.py
 │       │           ├── categories.py
+│       │           ├── entrepreneur.py
+│       │           ├── geocoding.py
 │       │           ├── itineraries.py
 │       │           ├── media.py
 │       │           ├── pois.py
 │       │           ├── reviews.py
-│       │           └── users.py
+│       │           ├── users.py
+│       │           └── weather.py
 │       ├── core/
 │       │   ├── config.py
 │       │   └── security.py
@@ -249,36 +294,47 @@ Back-end-TT/
 │       │   ├── models.py
 │       │   └── session.py
 │       ├── models/
+│       │   ├── ara_message.py
+│       │   ├── ara_session.py
 │       │   ├── bookmark.py
 │       │   ├── category.py
 │       │   ├── entrepreneur_profile.py
+│       │   ├── entrepreneur_post.py
 │       │   ├── itinerary.py
 │       │   ├── itinerary_step.py
 │       │   ├── poi.py
 │       │   ├── poi_category.py
+│       │   ├── poi_visit.py
 │       │   ├── review.py
 │       │   ├── tourist_profile.py
 │       │   └── user.py
 │       ├── repositories/
+│       │   ├── ara_repository.py
 │       │   ├── bookmark_repository.py
+│       │   ├── entrepreneur_repository.py
 │       │   ├── itinerary_repository.py
 │       │   ├── poi_repository.py
 │       │   ├── review_repository.py
 │       │   └── user_repository.py
 │       ├── schemas/
+│       │   ├── ara.py
 │       │   ├── bookmark.py
 │       │   ├── category.py
+│       │   ├── entrepreneur.py
 │       │   ├── entrepreneur_profile.py
+│       │   ├── geocoding.py
 │       │   ├── itinerary.py
-│       │   ├── media.py
 │       │   ├── poi.py
 │       │   ├── review.py
 │       │   ├── token.py
 │       │   ├── tourist_profile.py
-│       │   └── user.py
+│       │   ├── user.py
+│       │   └── weather.py
 │       └── services/
+│           ├── ara_service.py
 │           ├── embedding_service.py
 │           ├── geo_service.py
+│           ├── geocoding_service.py
 │           ├── image_service.py
 │           ├── llm_service.py
 │           ├── rag_service.py
@@ -887,9 +943,10 @@ Endpoints:
 - `GET /api/v1/users/me` devuelve usuario con `tourist_profile` y `entrepreneur_profile`.
 - `PUT /api/v1/users/me/tourist-profile` actualiza `full_name`, `has_own_transport` y `system_preferences`.
 - `POST /api/v1/users/me/entrepreneur-profile` crea/actualiza perfil emprendedor.
+- `DELETE /api/v1/users/me/tourist-profile/interests` resetea `interests_embedding` a `None` (escape hatch para perfil semántico contaminado).
 
 Uso principal:
-- permitir que el frontend edite preferencias reales y active flujo emprendedor sin crear una cuenta separada.
+- permitir que el frontend edite preferencias reales, active flujo emprendedor sin crear una cuenta separada, y reinicie el perfil semántico si reviews antiguas sesgan las recomendaciones.
 
 ## 15.4 `GET /api/v1/users/me`
 Archivo:
@@ -1027,18 +1084,22 @@ Body esperado:
 Flujo completo:
 1. exige usuario autenticado,
 2. exige que el usuario tenga `tourist_profile`,
-3. genera embedding de `payload.query`,
-4. busca `context_pois` con `POIRepository.search_hybrid`,
-5. si no hay POIs devuelve `404`,
-6. enriquece la query con fechas, ubicación y radio,
-7. envía consulta y POIs a `ItineraryGenerator`,
-8. valida el JSON generado con `GeneratedItinerary`,
-9. comprueba que todos los `poi_id` estén dentro de `context_pois`,
-10. si el LLM inventó lugares devuelve `502`,
-11. si el LLM no devolvió pasos devuelve `502`,
-12. persiste `Itinerary` e `ItineraryStep`,
-13. recarga pasos con su POI asociado,
-14. retorna `ItineraryResponse` completo, incluyendo `poi_nombre` y `poi_descripcion` por paso.
+3. toma `start_date` y `end_date` del payload como fuente de verdad,
+4. genera embedding de `payload.query`,
+5. busca `context_pois` con `POIRepository.search_hybrid`,
+6. si no hay POIs devuelve `404`,
+7. filtra o relega POIs no deseados según intención explícita: información/CONAF y alojamientos,
+8. consulta pronóstico climático,
+9. enriquece la query con fechas oficiales, ubicación, radio, clima y guía horaria,
+10. envía consulta y POIs a `ItineraryGenerator`,
+11. valida el JSON generado con `GeneratedItinerary`,
+12. normaliza horarios a `America/Santiago`,
+13. comprueba que todos los `poi_id` estén dentro de `context_pois`,
+14. rechaza pasos fuera de fecha, huecos grandes, alojamientos absurdos o uso no pedido de oficinas/servicios de información,
+15. sanitiza consejos recursivos inútiles,
+16. persiste `Itinerary` e `ItineraryStep`,
+17. recarga pasos con su POI asociado,
+18. retorna `ItineraryResponse` completo, incluyendo `poi_nombre`, `poi_descripcion`, `day_index`, `day_date` y `day_label` por paso.
 
 
 ## 15.9.1 `GET /api/v1/itineraries/`
@@ -1069,6 +1130,73 @@ Flujo:
 Uso principal:
 - permitir que el frontend abra un detalle persistido por URL/ID sin depender del estado en memoria.
 
+## 15.9.3 Endpoints de edición y mapa filtrado de itinerarios
+Archivo:
+- `app/api/v1/endpoints/itineraries.py`
+
+Endpoints:
+- `GET /api/v1/itineraries/{itinerary_id}/pois`: devuelve únicamente los POIs usados por el itinerario. Su objetivo principal es el mapa filtrado.
+- `PATCH /api/v1/itineraries/{itinerary_id}/steps/{step_id}`: acepta `poi_id`, `arrival_time`, `departure_time` y/o `ai_context` para modificar un paso.
+- `DELETE /api/v1/itineraries/{itinerary_id}/steps/{step_id}`: elimina un paso y reordena los restantes.
+- `PATCH /api/v1/itineraries/{itinerary_id}/steps/reorder`: acepta `{"step_ids": ["..."]}` y exige contener todos los steps exactamente una vez.
+- `DELETE /api/v1/itineraries/{itinerary_id}`: elimina el itinerario completo y responde `204 No Content`.
+
+Reglas:
+- todos requieren turista autenticado,
+- todos validan propiedad por `tourist_id=current_user.id`,
+- la eliminación completa se apoya en `ON DELETE CASCADE` para borrar steps.
+
+## 15.9.4 Contrato de fechas, timezone y metadata por día
+Archivo:
+- `app/schemas/itinerary.py`
+- `app/repositories/itinerary_repository.py`
+- `app/api/v1/endpoints/itineraries.py`
+
+Reglas actuales:
+- `start_date` y `end_date` del payload son la fuente de verdad.
+- Las fechas escritas en lenguaje natural dentro de `query` no deben sobreescribir el payload.
+- DeepSeek recibe instrucción explícita de usar el rango oficial y no devolver UTC/Z.
+- Backend normaliza horarios como hora civil de Chile (`America/Santiago`) antes de validar/persistir.
+- Backend rechaza `arrival_time` o `departure_time` fuera de `[start_date, end_date]`.
+- En viajes multi-día, backend exige distribución por días si hay suficientes steps, salvo intención explícita de descanso/traslado.
+
+Cada step de respuesta puede incluir:
+```json
+{
+  "day_index": 1,
+  "day_date": "2026-05-18",
+  "day_label": "Lunes 18"
+}
+```
+
+Esto permite que frontend agrupe itinerarios por día sin derivar fechas desde UTC.
+
+## 15.9.5 Ara conversacional
+Archivos:
+- `app/api/v1/endpoints/ara.py`
+- `app/services/ara_service.py`
+- `app/repositories/ara_repository.py`
+- `app/models/ara_session.py`
+- `app/models/ara_message.py`
+
+Endpoints:
+- `POST /api/v1/ara/sessions`
+- `POST /api/v1/ara/sessions/{session_id}/messages`
+- `GET /api/v1/ara/sessions/{session_id}/messages`
+- `POST /api/v1/ara/sessions/{session_id}/generate-itinerary`
+
+Flujo:
+1. Home envía `initial_message` con coordenadas, radio y fechas.
+2. Backend crea `AraSession` y guarda `AraMessage` del usuario.
+3. Ara detecta intención amplia/específica (`gastronomia`, `naturaleza`, `cultura`, `descanso`, etc.).
+4. Ara devuelve respuesta humana y quick replies dinámicos.
+5. El itinerario final solo se genera cuando el usuario confirma o elige `Hazlo todo tú`.
+6. `generate-itinerary` reutiliza el pipeline robusto de itinerarios: embeddings, búsqueda híbrida, clima, DeepSeek, validaciones y persistencia.
+
+Flujo “Cambiar lugar”:
+- si el mensaje contiene `itinerary_id` y `step_id`, Ara carga el itinerario, identifica el step actual, busca alternativas y devuelve chips `replace_step`.
+- si frontend envía el value `usar poi <poi_id> para step <step_id>`, backend actualiza el step con `ItineraryRepository.update_step(...)`.
+
 ## 15.10 `POST /api/v1/reviews/`
 Archivo:
 - `app/api/v1/endpoints/reviews.py`
@@ -1085,11 +1213,11 @@ Flujo completo:
 1. exige usuario autenticado,
 2. verifica que el usuario tenga `tourist_profile`,
 3. valida que exista el POI reseñado,
-4. genera embedding del texto de la review con OpenAI,
-5. persiste la review en `reviews`, incluyendo `text_embedding`,
-6. actualiza `tourist_profiles.interests_embedding`,
-7. confirma transacción,
-8. devuelve `ReviewResponse`.
+4. persiste la review inmediatamente con `text_embedding=None`,
+5. confirma transacción y devuelve `ReviewResponse`,
+6. en `BackgroundTasks`, genera embedding del texto con OpenAI,
+7. actualiza `reviews.text_embedding`,
+8. actualiza `tourist_profiles.interests_embedding` con media móvil exponencial.
 
 ### Importancia técnica
 Este endpoint es la primera feature donde una acción explícita del usuario modifica su representación semántica interna. La review no solo queda como contenido histórico; también se convierte en señal vectorial para personalización.
@@ -2037,6 +2165,56 @@ Los errores 401, 404 y 422 mantienen su status code correcto, pero ahora se devu
 
 ---
 
+### [2026-05-16] Ara conversacional, edición avanzada de itinerarios y contrato por día
+
+#### Objetivo
+- transformar la generación directa de itinerarios en una experiencia conversacional con Ara,
+- permitir que frontend edite, elimine, reordene y filtre itinerarios,
+- asegurar que fechas, timezone y agrupación por día sean consistentes para UI.
+
+#### Cambios realizados
+- Se agregaron `ara_sessions` y `ara_messages` con migración Alembic.
+- Se creó `app/api/v1/endpoints/ara.py` con sesiones, mensajes, historial y generación final.
+- Se creó `app/services/ara_service.py` para intención, preferencias, quick replies dinámicos y cambio de lugar.
+- Se agregó `DELETE /api/v1/itineraries/{itinerary_id}`.
+- Se agregaron endpoints para mapa filtrado, update/delete/reorder de steps.
+- `ItineraryStepResponse` ahora incluye `day_index`, `day_date` y `day_label`.
+- Backend normaliza horarios como `America/Santiago` y valida que estén dentro de `[start_date, end_date]`.
+- El prompt de DeepSeek prioriza fechas del payload, no fechas escritas en lenguaje natural.
+- Se endurecieron reglas contra oficinas/CONAF como parada principal, alojamientos usados como actividad turística, “hostel-hopping”, huecos grandes y consejos recursivos inútiles.
+- Ara ahora evita metalenguaje visible, sincroniza mejor mensaje/chips y evita loops de respuestas iguales.
+
+#### Estado resultante
+- el frontend puede abrir chat Ara desde Home sin redirigir directo a resultado,
+- puede renderizar quick replies enviados por backend,
+- puede pedir generación final al confirmar,
+- puede usar `day_index`/`day_date`/`day_label` para agrupar itinerarios por día,
+- puede abrir “Cambiar lugar” contra Ara usando `itinerary_id` y `step_id`,
+- y el backend rechaza o sanea itinerarios logísticamente absurdos antes de responder.
+
+---
+
+### [2026-05-16] Endpoints de sincronización frontend adicional
+
+#### Objetivo
+- cubrir necesidades de frontend para geocoding, clima público, perfil editable y módulo emprendedor.
+
+#### Cambios realizados
+- `GET /api/v1/geocoding/search` busca lugares por texto con sesgo opcional por lat/lon.
+- `GET /api/v1/weather/forecast` devuelve forecast diario estructurado (`daily`) y resumen textual (`forecast`).
+- `PATCH /api/v1/users/me` permite actualizar `email`, `avatar_url` y `display_name`.
+- `POST /api/v1/pois/{poi_id}/visit` registra visitas desde frontend.
+- `GET /api/v1/entrepreneur/me/metrics` entrega métricas agregadas.
+- `GET /api/v1/entrepreneur/me/income` entrega placeholder estable de ingresos.
+- CRUD de posts emprendedor bajo `/api/v1/entrepreneur/me/posts`.
+
+#### Estado resultante
+- frontend ya no necesita mocks para geocoding/clima/perfil/emprendedor básico,
+- las métricas se pueden expandir sin romper contrato,
+- y el backend mantiene respuestas flexibles pero con campos estables.
+
+---
+
 ## 24. Estado final al cierre de esta actualización
 Hoy el backend puede:
 
@@ -2057,6 +2235,10 @@ Hoy el backend puede:
 - persistir itinerarios y pasos,
 - listar itinerarios del turista autenticado,
 - recuperar detalle de itinerario por ID validando propiedad,
+- eliminar itinerarios completos del historial,
+- editar, eliminar y reordenar pasos de itinerarios,
+- entregar POIs de un itinerario para mapa filtrado,
+- agrupar pasos por día mediante `day_index`, `day_date` y `day_label`,
 - guardar y quitar POIs favoritos de turistas,
 - subir imágenes locales y servirlas desde `/media`,
 - medir latencia por request con `X-Process-Time`,
@@ -2064,13 +2246,22 @@ Hoy el backend puede:
 - asegurar categorías base de forma idempotente,
 - usar índice HNSW para acelerar búsqueda vectorial,
 - mantener su esquema versionado con Alembic sobre una metadata ORM correctamente registrada,
-- e importar masivamente POIs reales desde OpenStreetMap para enriquecer el contexto del sistema.
+- importar masivamente POIs reales desde OpenStreetMap para enriquecer el contexto del sistema,
+- diversificar automáticamente los candidatos conversacionales de Ara cuando una dimensión está completada, rompiendo loops de una sola categoría,
+- validar y reparar determinísticamente violaciones de horarios de apertura en itinerarios generados,
+- evitar saturación monocategórica en itinerarios con reparación automática y límites duros,
+- sanitizar metalenguaje algorítmico y consejos delegados en las respuestas del LLM,
+- resetear el perfil semántico del turista vía endpoint dedicado,
+- usar peso configurable del perfil semántico en búsqueda híbrida, reducido en generación de nuevos itinerarios,
+- limpiar automáticamente el estado de sesión al cambiar de fase conversacional (post-generación, post-reemplazo),
+- y desarrollar con hot reload vía volume mount de código y `--reload`.
 
-La siguiente gran etapa natural del proyecto sería profundizar:
+La siguiente etapa natural del proyecto sería profundizar:
 - autorización por roles,
 - tests automatizados,
 - services de aplicación más ricos,
 - ranking híbrido más avanzado,
+- validación cronológica en reordenamiento de pasos,
 - moderación/paginación de reviews,
 - métricas agregadas más avanzadas por POI,
 - job queue persistente tipo Celery/RQ/Arq si las background tasks crecen,
@@ -2163,3 +2354,65 @@ La siguiente gran etapa natural del proyecto sería profundizar:
 #### Estado resultante
 - backend más seguro: sin secretos en el repo, sin endpoint de upload público, sin `.env` versionado.
 - `SECRET_KEY` es ahora un requisito explícito en startup (fail-fast si falta).
+
+
+### [2026-05-18] Estabilización conversacional de Ara y robustez del motor de itinerarios
+
+#### Objetivo
+- resolver los bugs críticos de la experiencia conversacional con Ara,
+- endurecer la generación de itinerarios contra violaciones horarias y saturación categórica,
+- eliminar fugas de estado entre sesiones y preferencias fantasma,
+- mejorar la calidad de las respuestas del LLM eliminando metalenguaje técnico,
+- habilitar hot reload para desarrollo ágil.
+
+#### Cambios realizados
+
+**Fase 1 — Food Loop y Prompt Leakage (BUG-002, BUG-003)**
+- `_maybe_diversify_candidate_pois` ahora diversifica cuando la categoría del intent primario ya está en `completed_dimensions`, rompiendo el ciclo infinito de comida.
+- `_align_candidate_pois_with_intent` recibe `completed_dimensions` como parámetro y no filtra cuando el intent ya está completado.
+- `FOOD_COMPLETION_TAGS` removió `"vista"` (no es exclusivo de gastronomía).
+- `merge_preferences` solo marca `completed_dimensions` cuando `turn_type == "candidate_selection"`, no por mera mención de keywords.
+- `build_refined_query` eliminó la duplicación del `trip_draft` en el prompt del LLM (iba dos veces). Se reemplazó por `Tags acumulados` y `Dimensiones completadas`.
+- System prompt del LLM expandido con prohibición explícita de frases algorítmicas: "para mantener variedad", "evitar repetir", "alternativa para", "equilibrar la ruta", etc.
+- `DELEGATED_RECOMMENDATION_TERMS` expandido con 9 patrones nuevos.
+- `_replace_step_poi` y `_repair_duplicate_poi_steps` ahora generan reason contextualizado con nombre y descripción real del POI reemplazante, en vez del texto genérico anterior.
+- `_sanitize_generated_itinerary_context` agregó detección de razones cortas provenientes de system repairs para sanitizarlas también.
+
+**Fase 2 — Time-Window Violation y Category Saturation (BUG-004, BUG-005)**
+- `parse_opening_hours_text` reescrito con `_split_opening_hours_segments`: divide el texto por `;`, `.` y por nombres de días consecutivos, parseando cada segmento independientemente para no mezclar horas de días distintos.
+- Nueva función `_has_cerrado`. Días explícitamente cerrados retornan `[]` (lista vacía), distinguible de "sin datos" (día no presente en el dict).
+- `_step_fits_opening_windows` reescrito: ahora distingue tres casos — sin datos (True), explícitamente cerrado (False), con ventanas (verifica arrival/departure dentro).
+- Repair de time-window ahora permite reemplazos gastronómicos (removido `not _is_gastronomy(candidate)` del primer loop). Un restaurante mal agendado puede ser reemplazado por otro que sí abra en ese horario.
+- Regla 11 del system prompt endurecida: "ANTES de asignar un POI a un slot horario, VERIFICÁ su opening_hours_text".
+- Nueva función `_primary_category_id` con orden de prioridad determinista: gastronomía > alojamiento > naturaleza > cultura > fallback `category_ids[0]`. Reemplaza todos los usos de `poi.category_ids[0]` que no eran confiables.
+- Repair de saturación ahora intenta fallback con cualquier POI diferente (incluso misma categoría) antes de eliminar el paso.
+- `_normalize_to_chile_wall_time` mejorado: naive → asume Chile, timezone no-Chile → convierte con `astimezone`, ya en Chile → no-op.
+
+**Fase 3 — Ghost Context Leak y Hot Reload (BUG-006, BUG-001)**
+- `search_hybrid` en `POIRepository` ahora acepta `profile_weight` configurable (default 0.3). La fórmula: `(query * (1 - weight)) + (profile * weight)`.
+- `_search_generation_context_with_fallbacks` usa `profile_weight=0.1` para priorizar la intención explícita del usuario sobre su historial semántico.
+- `preferences = dict(previous_preferences)` → `copy.deepcopy(previous_preferences)` en la rama `free_question`. Los dicts anidados ya no se comparten con la sesión.
+- `candidate_poi_ids` se limpia a `[]` post-generación del itinerario para no arrastrar POIs viejos.
+- `replacement_context` se elimina de `preferences_data` tras ejecutar el reemplazo de un step.
+- Nuevo endpoint `DELETE /api/v1/users/me/tourist-profile/interests` para resetear el perfil semántico del turista.
+- `docker-compose.yml` agregó volume mount `./app:/app/app` y `command: uvicorn ... --reload` para hot reload en desarrollo. Sin el flag `-v` en `docker compose down`, los datos de PostgreSQL no se pierden.
+
+#### Archivos creados/modificados
+- `ruta_viva/app/api/v1/endpoints/ara.py`
+- `ruta_viva/app/services/ara_service.py`
+- `ruta_viva/app/services/llm_service.py`
+- `ruta_viva/app/api/v1/endpoints/itineraries.py`
+- `ruta_viva/app/services/poi_metadata_extractor.py`
+- `ruta_viva/app/repositories/poi_repository.py`
+- `ruta_viva/app/repositories/user_repository.py`
+- `ruta_viva/app/api/v1/endpoints/users.py`
+- `ruta_viva/docker-compose.yml`
+
+#### Estado resultante
+- Ara ya no queda atrapada en loops de una sola categoría: cuando el usuario completa una dimensión (ej: gastronomía), el sistema diversifica automáticamente las tarjetas de candidatos y los quick replies.
+- Los itinerarios generados respetan mejor los horarios de apertura, no agendan POIs cerrados y evitan saturación de una sola categoría en el día.
+- Las respuestas del LLM ya no incluyen frases robóticas de planificador algorítmico; los mensajes de reparación usan datos reales del POI.
+- El perfil semántico del usuario ya no contamina búsquedas de itinerarios nuevos (peso reducido a 0.1 en generación).
+- El estado de sesión (replacement_context, candidate_poi_ids) se limpia correctamente al cambiar de fase conversacional.
+- El frontend puede resetear el perfil semántico del turista vía endpoint dedicado.
+- El desarrollo es más ágil: cambios en el código se reflejan sin rebuild del contenedor.

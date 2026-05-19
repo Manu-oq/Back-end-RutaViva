@@ -156,3 +156,15 @@ class UserRepository:
             raise
 
         return entrepreneur_profile
+
+    async def reset_interests_embedding(self, db: AsyncSession, user_id: UUID) -> None:
+        tourist_profile = await db.get(TouristProfile, user_id)
+        if tourist_profile is None:
+            return
+
+        tourist_profile.interests_embedding = None
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise

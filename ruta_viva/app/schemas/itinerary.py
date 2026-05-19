@@ -50,6 +50,9 @@ class ItineraryStepResponse(BaseModel):
     step_order: int
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
+    day_index: int | None = None
+    day_date: date | None = None
+    day_label: str | None = None
     ai_context: dict[str, Any] | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -32,6 +32,38 @@ def _ensure_can_manage_poi(current_user: User, entrepreneur_id: UUID | None) -> 
         )
 
 
+def _parse_category_ids(category_ids: list[str] | None) -> list[int] | None:
+    if not category_ids:
+        return None
+
+    parsed_ids: list[int] = []
+    invalid_values: list[str] = []
+
+    for raw_value in category_ids:
+        for value in raw_value.split(","):
+            cleaned_value = value.strip()
+            if not cleaned_value:
+                continue
+            try:
+                category_id = int(cleaned_value)
+            except ValueError:
+                invalid_values.append(cleaned_value)
+                continue
+            if category_id <= 0:
+                invalid_values.append(cleaned_value)
+                continue
+            if category_id not in parsed_ids:
+                parsed_ids.append(category_id)
+
+    if invalid_values:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"category_ids must contain positive integer IDs. Invalid values: {', '.join(invalid_values)}",
+        )
+
+    return parsed_ids or None
+
+
 @router.post("/", response_model=POIResponse, status_code=status.HTTP_201_CREATED)
 async def create_poi(
     payload: POICreate,
@@ -71,9 +103,24 @@ async def search_nearby_pois(
     lat: float = Query(...),
     lon: float = Query(...),
     radius: float = Query(5000, gt=0),
+    category_ids: list[str] | None = Query(
+        default=None,
+        description=(
+            "Optional category filter. Accepts comma-separated IDs "
+            "(category_ids=2,4,9) or repeated query params "
+            "(category_ids=2&category_ids=4)."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> list[POIResponse]:
-    return await poi_repository.get_pois_nearby(db, lat=lat, lon=lon, radius_meters=radius)
+    parsed_category_ids = _parse_category_ids(category_ids)
+    return await poi_repository.get_pois_nearby(
+        db,
+        lat=lat,
+        lon=lon,
+        radius_meters=radius,
+        category_ids=parsed_category_ids,
+    )
 
 
 @router.get("/semantic-search", response_model=list[POIResponse])
@@ -82,6 +129,7 @@ async def semantic_search_pois(
     lat: float = Query(...),
     lon: float = Query(...),
     radius: float = Query(5000, gt=0),
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(get_optional_current_user),
     embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
@@ -99,6 +147,7 @@ async def semantic_search_pois(
         radius_meters=radius,
         query_embedding=query_embedding,
         user_interests_embedding=user_interests_embedding,
+        limit=limit,
     )
 
 

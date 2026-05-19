@@ -6,11 +6,12 @@ import logging
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import requests
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -20,7 +21,8 @@ import app.db.models  # noqa: F401
 from app.db.session import AsyncSessionLocal, init_db
 from app.models.category import Category
 from app.models.poi import POI
-from app.repositories.poi_repository import POIRepository
+from app.models.poi_category import POICategory
+from app.repositories.poi_repository import POIRepository, from_text
 from app.schemas.poi import POICreate
 from app.services.embedding_service import get_embedding_service
 
@@ -40,14 +42,131 @@ FOOD_AMENITIES = {
     "food_court",
     "ice_cream",
 }
-NATURAL_FEATURES = {"beach", "water", "peak"}
-WATER_NATURAL_FEATURES = {"beach", "water"}
-PEAK_NATURAL_FEATURES = {"peak"}
+CEMETERY_AMENITIES = {"crematorium", "grave_yard"}
+BLACKLIST_LANDUSE = {"cemetery", "industrial", "landfill"}
+SERVICE_AMENITIES = {
+    "atm",
+    "bank",
+    "bureau_de_change",
+    "charging_station",
+    "clinic",
+    "dentist",
+    "doctors",
+    "drinking_water",
+    "fuel",
+    "hospital",
+    "pharmacy",
+    "police",
+    "post_office",
+    "public_bath",
+    "ranger_station",
+    "recycling",
+    "shower",
+    "toilets",
+    "veterinary",
+}
+CULTURE_AMENITIES = {
+    "arts_centre",
+    "cinema",
+    "community_centre",
+    "events_venue",
+    "library",
+    "theatre",
+}
+NATURAL_FEATURES = {
+    "bay",
+    "beach",
+    "cave_entrance",
+    "cliff",
+    "forest",
+    "geyser",
+    "glacier",
+    "hot_spring",
+    "peak",
+    "peninsula",
+    "reef",
+    "rock",
+    "saddle",
+    "spring",
+    "stone",
+    "tree",
+    "volcano",
+    "water",
+    "wetland",
+    "wood",
+}
+WATER_NATURAL_FEATURES = {"bay", "beach", "geyser", "hot_spring", "spring", "water", "wetland"}
+PEAK_NATURAL_FEATURES = {"cliff", "peak", "rock", "saddle", "stone", "volcano"}
 INFORMATION_TOURISM = {"information"}
 TREKKING_TOURISM = {"trail", "hiking", "route"}
-THERMAL_KEYWORDS = {"terma", "termas", "thermal", "hot spring", "spa"}
-TRANSPORT_AMENITIES = {"bus_station", "ferry_terminal", "parking", "taxi"}
+THERMAL_KEYWORDS = {"terma", "termas", "thermal", "hot spring", "hot_spring", "spa"}
+TRANSPORT_AMENITIES = {
+    "bicycle_parking",
+    "bicycle_rental",
+    "bus_station",
+    "car_rental",
+    "ferry_terminal",
+    "parking",
+    "taxi",
+}
 CRAFT_AMENITIES = {"marketplace"}
+RELEVANT_SHOPS = {
+    "alcohol",
+    "bakery",
+    "books",
+    "butcher",
+    "chocolate",
+    "coffee",
+    "confectionery",
+    "convenience",
+    "craft",
+    "deli",
+    "farm",
+    "greengrocer",
+    "mall",
+    "outdoor",
+    "pastry",
+    "seafood",
+    "sports",
+    "supermarket",
+    "souvenir",
+    "tea",
+    "travel_agency",
+    "wine",
+}
+RELEVANT_LEISURE = {
+    "bird_hide",
+    "common",
+    "dog_park",
+    "firepit",
+    "fishing",
+    "garden",
+    "marina",
+    "nature_reserve",
+    "park",
+    "picnic_table",
+    "pitch",
+    "playground",
+    "sports_centre",
+    "stadium",
+    "swimming_area",
+    "swimming_pool",
+    "track",
+    "water_park",
+}
+RELEVANT_MAN_MADE = {
+    "beacon",
+    "bridge",
+    "cross",
+    "lighthouse",
+    "obelisk",
+    "observatory",
+    "pier",
+    "survey_point",
+    "tower",
+    "water_tower",
+    "watermill",
+}
 LODGING_TOURISM = {
     "hotel",
     "hostel",
@@ -66,6 +185,7 @@ CULTURE_TOURISM = {
     "theme_park",
 }
 VIEWPOINT_TOURISM = {"viewpoint"}
+PLACE_TYPES = {"city", "town", "village", "hamlet", "locality", "suburb", "neighbourhood", "isolated_dwelling"}
 
 DEFAULT_CATEGORIES = {
     1: "Naturaleza",
@@ -108,6 +228,13 @@ class OSMPlace:
     raw_tags: dict[str, str]
 
 
+class ImportStatus(str, Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class EmbeddingRateLimiter:
     def __init__(self, min_interval_seconds: float) -> None:
         self.min_interval_seconds = min_interval_seconds
@@ -127,15 +254,41 @@ class EmbeddingRateLimiter:
 def build_overpass_queries() -> list[str]:
     selectors = """
   nwr["tourism"](area.searchArea);
-  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream"](area.searchArea);
-  nwr["leisure"="park"](area.searchArea);
-  nwr["natural"~"beach|water|peak"](area.searchArea);
+  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|arts_centre|cinema|community_centre|events_venue|library|theatre|marketplace|bus_station|ferry_terminal|parking|taxi|bicycle_rental|car_rental|fuel|charging_station|toilets|shower|drinking_water|public_bath|bank|atm|bureau_de_change|pharmacy|hospital|clinic|doctors|dentist|police|post_office|ranger_station|grave_yard|crematorium"](area.searchArea);
+  nwr["leisure"~"park|nature_reserve|garden|picnic_table|playground|sports_centre|stadium|swimming_pool|swimming_area|water_park|track|pitch|marina|fishing|firepit|bird_hide|dog_park|common"](area.searchArea);
+  nwr["natural"~"bay|beach|cave_entrance|cliff|forest|geyser|glacier|hot_spring|peak|peninsula|reef|rock|saddle|spring|stone|tree|volcano|water|wetland|wood"](area.searchArea);
+  nwr["historic"](area.searchArea);
+  nwr["shop"~"alcohol|bakery|books|butcher|chocolate|coffee|confectionery|convenience|craft|deli|farm|greengrocer|mall|outdoor|pastry|seafood|sports|supermarket|souvenir|tea|travel_agency|wine"](area.searchArea);
+  nwr["craft"](area.searchArea);
+  nwr["sport"](area.searchArea);
+  nwr["man_made"~"beacon|bridge|cross|lighthouse|obelisk|observatory|pier|survey_point|tower|water_tower|watermill"](area.searchArea);
+  nwr["waterway"](area.searchArea);
+  nwr["place"~"city|town|village|hamlet|locality|suburb|neighbourhood|isolated_dwelling"](area.searchArea);
+  nwr["landuse"~"cemetery|industrial|landfill"](area.searchArea);
+  nwr["highway"="bus_stop"](area.searchArea);
+  nwr["railway"~"station|halt"](area.searchArea);
+  nwr["public_transport"](area.searchArea);
+  nwr["route"~"hiking|bicycle|mtb|foot|horse"](area.searchArea);
+  nwr["information"](area.searchArea);
 """.strip()
     bbox_selectors = f"""
   nwr["tourism"]{ARAUCANIA_BBOX};
-  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream"]{ARAUCANIA_BBOX};
-  nwr["leisure"="park"]{ARAUCANIA_BBOX};
-  nwr["natural"~"beach|water|peak"]{ARAUCANIA_BBOX};
+  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|arts_centre|cinema|community_centre|events_venue|library|theatre|marketplace|bus_station|ferry_terminal|parking|taxi|bicycle_rental|car_rental|fuel|charging_station|toilets|shower|drinking_water|public_bath|bank|atm|bureau_de_change|pharmacy|hospital|clinic|doctors|dentist|police|post_office|ranger_station|grave_yard|crematorium"]{ARAUCANIA_BBOX};
+  nwr["leisure"~"park|nature_reserve|garden|picnic_table|playground|sports_centre|stadium|swimming_pool|swimming_area|water_park|track|pitch|marina|fishing|firepit|bird_hide|dog_park|common"]{ARAUCANIA_BBOX};
+  nwr["natural"~"bay|beach|cave_entrance|cliff|forest|geyser|glacier|hot_spring|peak|peninsula|reef|rock|saddle|spring|stone|tree|volcano|water|wetland|wood"]{ARAUCANIA_BBOX};
+  nwr["historic"]{ARAUCANIA_BBOX};
+  nwr["shop"~"alcohol|bakery|books|butcher|chocolate|coffee|confectionery|convenience|craft|deli|farm|greengrocer|mall|outdoor|pastry|seafood|sports|supermarket|souvenir|tea|travel_agency|wine"]{ARAUCANIA_BBOX};
+  nwr["craft"]{ARAUCANIA_BBOX};
+  nwr["sport"]{ARAUCANIA_BBOX};
+  nwr["man_made"~"beacon|bridge|cross|lighthouse|obelisk|observatory|pier|survey_point|tower|water_tower|watermill"]{ARAUCANIA_BBOX};
+  nwr["waterway"]{ARAUCANIA_BBOX};
+  nwr["place"~"city|town|village|hamlet|locality|suburb|neighbourhood|isolated_dwelling"]{ARAUCANIA_BBOX};
+  nwr["landuse"~"cemetery|industrial|landfill"]{ARAUCANIA_BBOX};
+  nwr["highway"="bus_stop"]{ARAUCANIA_BBOX};
+  nwr["railway"~"station|halt"]{ARAUCANIA_BBOX};
+  nwr["public_transport"]{ARAUCANIA_BBOX};
+  nwr["route"~"hiking|bicycle|mtb|foot|horse"]{ARAUCANIA_BBOX};
+  nwr["information"]{ARAUCANIA_BBOX};
 """.strip()
 
     return [
@@ -326,33 +479,75 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
     tourism = tags.get("tourism")
     amenity = tags.get("amenity")
     natural = tags.get("natural")
+    landuse = tags.get("landuse")
+    leisure = tags.get("leisure")
+    shop = tags.get("shop")
+    historic = tags.get("historic")
+    craft = tags.get("craft")
+    sport = tags.get("sport")
+    man_made = tags.get("man_made")
+    waterway = tags.get("waterway")
+    place = tags.get("place")
+    highway = tags.get("highway")
+    railway = tags.get("railway")
+    route = tags.get("route")
+    public_transport = tags.get("public_transport")
+    landuse = tags.get("landuse")
     name = clean_text(tags.get("name")) or ""
     lower_name = name.lower()
 
     if natural in NATURAL_FEATURES:
         category_names.append("Naturaleza")
-    if tags.get("leisure") == "park":
+    if leisure in RELEVANT_LEISURE:
         if "Naturaleza" not in category_names:
             category_names.append("Naturaleza")
-        category_names.append("Parques/Reservas")
+        if leisure in {"park", "nature_reserve", "garden", "common", "bird_hide"}:
+            category_names.append("Parques/Reservas")
+        if leisure in {"sports_centre", "stadium", "swimming_pool", "swimming_area", "water_park", "track", "pitch"}:
+            category_names.append("Aventura/Deportes")
     if natural in WATER_NATURAL_FEATURES:
         category_names.append("Lagos/Ríos/Playas")
     if natural in PEAK_NATURAL_FEATURES:
         category_names.append("Montañas/Volcanes/Miradores")
-    if "volc" in lower_name or "mirador" in lower_name:
+    if waterway:
+        category_names.append("Lagos/Ríos/Playas")
+        if "Naturaleza" not in category_names:
+            category_names.append("Naturaleza")
+    if natural == "hot_spring" or any(keyword in lower_name for keyword in THERMAL_KEYWORDS):
+        category_names.append("Termas/Bienestar")
+    if "volc" in lower_name or "mirador" in lower_name or tourism in VIEWPOINT_TOURISM:
         category_names.append("Montañas/Volcanes/Miradores")
     if "lago" in lower_name or "playa" in lower_name or "río" in lower_name or "rio" in lower_name:
         category_names.append("Lagos/Ríos/Playas")
-    if "sendero" in lower_name or "trekking" in lower_name:
+    if "sendero" in lower_name or "trekking" in lower_name or route in {"hiking", "foot", "horse"}:
         category_names.append("Trekking/Senderismo")
-    if any(keyword in lower_name for keyword in THERMAL_KEYWORDS):
-        category_names.append("Termas/Bienestar")
+    if route in {"bicycle", "mtb"} or sport:
+        category_names.append("Aventura/Deportes")
     if amenity in FOOD_AMENITIES:
+        category_names.append("Gastronomía")
+    if amenity in CEMETERY_AMENITIES or landuse == "cemetery" or "cementerio" in lower_name:
+        category_names.append("Cultura")
+    if shop in {"bakery", "chocolate", "coffee", "confectionery", "deli", "pastry", "seafood", "tea", "wine"}:
         category_names.append("Gastronomía")
     if amenity in TRANSPORT_AMENITIES:
         category_names.append("Transporte/Accesos")
-    if amenity in CRAFT_AMENITIES or "artesanía" in lower_name or "artesania" in lower_name:
+    if highway == "bus_stop" or railway in {"station", "halt"} or public_transport:
+        category_names.append("Transporte/Accesos")
+    if amenity in SERVICE_AMENITIES:
+        category_names.append("Servicios turísticos/Información")
+    if amenity in CRAFT_AMENITIES or shop in {"craft", "souvenir"} or craft or "artesanía" in lower_name or "artesania" in lower_name:
         category_names.append("Artesanía/Compras locales")
+    if shop in RELEVANT_SHOPS and shop not in {"craft", "souvenir"}:
+        category_names.append("Turismo")
+    if amenity in CULTURE_AMENITIES or historic:
+        category_names.append("Cultura")
+        category_names.append("Museos/Patrimonio")
+    if man_made in RELEVANT_MAN_MADE:
+        category_names.append("Turismo")
+        if man_made in {"tower", "observatory", "lighthouse", "survey_point"}:
+            category_names.append("Montañas/Volcanes/Miradores")
+    if landuse in {"industrial", "landfill"}:
+        category_names.append("Servicios turísticos/Información")
     if tourism in INFORMATION_TOURISM or "conaf" in lower_name or "información" in lower_name or "informacion" in lower_name:
         category_names.append("Servicios turísticos/Información")
     if tourism in LODGING_TOURISM:
@@ -363,6 +558,8 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
     elif tourism in VIEWPOINT_TOURISM:
         category_names.append("Montañas/Volcanes/Miradores")
     elif tourism:
+        category_names.append("Turismo")
+    if place in PLACE_TYPES:
         category_names.append("Turismo")
 
     if not category_names:
@@ -377,6 +574,24 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
 
 def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]) -> dict[str, Any]:
     lower_name = name.lower()
+    amenity = tags.get("amenity")
+    tourism = tags.get("tourism")
+    natural = tags.get("natural")
+    route = tags.get("route")
+    shop = tags.get("shop")
+    landuse = tags.get("landuse")
+    searchable_text = " ".join(
+        filter(
+            None,
+            [
+                lower_name,
+                tags.get("amenity"),
+                tags.get("landuse"),
+                tags.get("industrial"),
+                tags.get("man_made"),
+            ],
+        )
+    )
     rules: dict[str, Any] = {
         "is_primary_experience": True,
         "requires_daylight": False,
@@ -386,14 +601,77 @@ def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]
         "confidence": "inferred",
     }
 
-    if "Servicios turísticos/Información" in category_names:
+    if amenity in CEMETERY_AMENITIES or landuse == "cemetery" or "cementerio" in lower_name or "cemetery" in searchable_text:
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": True,
+                "night_suitable": False,
+                "latest_recommended_start_time": "16:30",
+                "blocked_for_itinerary": True,
+                "block_reason": "cemetery",
+                "allow_if_user_intent": ["cementerio", "patrimonial", "histórico", "historico", "memorial"],
+                "access_notes": "Cementerio o memorial: no usar como panorama familiar salvo interés patrimonial explícito.",
+            }
+        )
+    elif landuse == "landfill" or any(term in searchable_text for term in ("landfill", "waste", "dump", "vertedero", "basural")):
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": False,
+                "night_suitable": False,
+                "latest_recommended_start_time": None,
+                "blocked_for_itinerary": True,
+                "block_reason": "waste",
+                "access_notes": "Infraestructura de residuos: no usar como parada turística.",
+            }
+        )
+    elif landuse == "industrial" or any(term in searchable_text for term in ("industrial", "factory", "works", "plant")):
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": False,
+                "night_suitable": False,
+                "latest_recommended_start_time": None,
+                "blocked_for_itinerary": True,
+                "block_reason": "industrial",
+                "access_notes": "Zona o infraestructura industrial: no usar como parada turística.",
+            }
+        )
+    elif "Servicios turísticos/Información" in category_names or amenity in SERVICE_AMENITIES:
         rules.update(
             {
                 "is_primary_experience": False,
                 "requires_daylight": False,
                 "night_suitable": False,
                 "latest_recommended_start_time": "17:00",
-                "access_notes": "Centro u oficina informativa: usar como apoyo, no como parada turística principal salvo intención explícita.",
+                "blocked_for_itinerary": True,
+                "block_reason": "logistic_service",
+                "allow_if_user_intent": ["servicio", "farmacia", "hospital", "banco", "baño", "combustible", "emergencia"],
+                "access_notes": "Servicio de apoyo logístico: usar como referencia o necesidad puntual, no como parada turística principal salvo intención explícita.",
+            }
+        )
+    elif amenity in TRANSPORT_AMENITIES or tags.get("highway") == "bus_stop" or tags.get("railway") in {"station", "halt"}:
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": False,
+                "night_suitable": False,
+                "latest_recommended_start_time": "20:00",
+                "blocked_for_itinerary": True,
+                "block_reason": "pure_transport",
+                "allow_if_user_intent": ["transporte", "bus", "terminal", "salida", "llegada", "traslado"],
+                "access_notes": "Punto de transporte: usar solo si el usuario necesita llegar, salir o trasladarse.",
+            }
+        )
+    elif "Alojamiento" in category_names:
+        rules.update(
+            {
+                "is_primary_experience": False,
+                "requires_daylight": False,
+                "night_suitable": True,
+                "latest_recommended_start_time": "21:00",
+                "access_notes": "Alojamiento: usar solo para check-in/check-out o descanso cuando el usuario lo pida explícitamente.",
             }
         )
     elif "Termas/Bienestar" in category_names or tags.get("amenity") in FOOD_AMENITIES:
@@ -409,6 +687,8 @@ def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]
         "Montañas/Volcanes/Miradores" in category_names
         or "Trekking/Senderismo" in category_names
         or "Parques/Reservas" in category_names
+        or natural in PEAK_NATURAL_FEATURES
+        or route in {"hiking", "foot", "horse", "bicycle", "mtb"}
         or "volc" in lower_name
         or "sendero" in lower_name
     ):
@@ -418,6 +698,15 @@ def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]
                 "night_suitable": False,
                 "latest_recommended_start_time": "15:30",
                 "access_notes": "Actividad outdoor o de acceso natural: programar con luz de día salvo horario conocido que indique lo contrario.",
+            }
+        )
+    elif shop in RELEVANT_SHOPS or tourism in CULTURE_TOURISM:
+        rules.update(
+            {
+                "requires_daylight": False,
+                "night_suitable": False,
+                "latest_recommended_start_time": "18:00",
+                "access_notes": "Comercio, cultura o punto urbano: verificar horario informado antes de programar.",
             }
         )
 
@@ -430,8 +719,19 @@ def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]
 def describe_place_type(tags: dict[str, str]) -> str:
     tourism = tags.get("tourism")
     amenity = tags.get("amenity")
+    landuse = tags.get("landuse")
     leisure = tags.get("leisure")
     natural = tags.get("natural")
+    historic = tags.get("historic")
+    shop = tags.get("shop")
+    craft = tags.get("craft")
+    sport = tags.get("sport")
+    man_made = tags.get("man_made")
+    waterway = tags.get("waterway")
+    place = tags.get("place")
+    highway = tags.get("highway")
+    railway = tags.get("railway")
+    route = tags.get("route")
 
     if amenity in FOOD_AMENITIES:
         cuisine = clean_text(tags.get("cuisine"))
@@ -439,11 +739,50 @@ def describe_place_type(tags: dict[str, str]) -> str:
             return f"espacio gastronómico tipo {amenity.replace('_', ' ')} con cocina {cuisine.replace(';', ', ')}"
         return f"espacio gastronómico tipo {amenity.replace('_', ' ')}"
 
-    if leisure == "park":
-        return "parque o área recreativa al aire libre"
+    if amenity in CEMETERY_AMENITIES or landuse == "cemetery":
+        return "cementerio o memorial"
+
+    if landuse in {"industrial", "landfill"}:
+        return f"zona de uso {landuse.replace('_', ' ')}"
+
+    if amenity in CULTURE_AMENITIES:
+        return f"espacio cultural tipo {amenity.replace('_', ' ')}"
+
+    if amenity in TRANSPORT_AMENITIES or highway == "bus_stop" or railway in {"station", "halt"}:
+        return "punto de transporte o acceso"
+
+    if amenity in SERVICE_AMENITIES:
+        return f"servicio de apoyo para viajeros tipo {amenity.replace('_', ' ')}"
+
+    if leisure in RELEVANT_LEISURE:
+        return f"área recreativa tipo {leisure.replace('_', ' ')}"
 
     if natural in NATURAL_FEATURES:
         return f"atractivo natural tipo {natural.replace('_', ' ')}"
+
+    if historic:
+        return f"hito histórico o patrimonial tipo {historic.replace('_', ' ')}"
+
+    if shop:
+        return f"comercio local tipo {shop.replace('_', ' ')}"
+
+    if craft:
+        return f"actividad artesanal o productiva tipo {craft.replace('_', ' ')}"
+
+    if sport:
+        return f"espacio o referencia deportiva relacionada con {sport.replace('_', ' ')}"
+
+    if man_made:
+        return f"estructura o hito construido tipo {man_made.replace('_', ' ')}"
+
+    if waterway:
+        return f"curso o cuerpo de agua tipo {waterway.replace('_', ' ')}"
+
+    if place:
+        return f"localidad o referencia territorial tipo {place.replace('_', ' ')}"
+
+    if route:
+        return f"ruta o recorrido tipo {route.replace('_', ' ')}"
 
     if tourism:
         return f"atractivo turístico tipo {tourism.replace('_', ' ')}"
@@ -492,6 +831,29 @@ def build_multimedia_payload(element: dict[str, Any], tags: dict[str, str]) -> d
     if wikipedia:
         payload["wikipedia"] = wikipedia
 
+    relevant_osm_tag_keys = {
+        "amenity",
+        "tourism",
+        "leisure",
+        "natural",
+        "historic",
+        "shop",
+        "craft",
+        "sport",
+        "man_made",
+        "waterway",
+        "place",
+        "highway",
+        "railway",
+        "public_transport",
+        "route",
+        "landuse",
+        "industrial",
+    }
+    osm_tags = {key: value for key, value in tags.items() if key in relevant_osm_tag_keys}
+    if osm_tags:
+        payload["osm_tags"] = osm_tags
+
     return payload
 
 
@@ -529,8 +891,8 @@ def build_place(element: dict[str, Any]) -> OSMPlace | None:
     )
 
 
-async def osm_poi_with_embedding_already_imported(db, place: OSMPlace) -> bool:
-    stmt = select(POI.id).where(
+async def get_existing_osm_poi(db, place: OSMPlace) -> POI | None:
+    stmt = select(POI).where(
         POI.multimedia_urls.contains(
             {
                 "source": "OpenStreetMap",
@@ -538,9 +900,78 @@ async def osm_poi_with_embedding_already_imported(db, place: OSMPlace) -> bool:
                 "osm_id": place.osm_id,
             }
         )
-    ).where(POI.description_embedding.is_not(None))
+    )
     result = await db.execute(stmt)
-    return result.scalar_one_or_none() is not None
+    return result.scalar_one_or_none()
+
+
+async def delete_existing_osm_pois() -> int:
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(
+                delete(POI).where(POI.multimedia_urls.contains({"source": "OpenStreetMap"}))
+            )
+            await db.commit()
+            deleted_count = int(result.rowcount or 0)
+            logger.warning("POIs OpenStreetMap eliminados antes de importar: %s", deleted_count)
+            return deleted_count
+        except Exception:
+            await db.rollback()
+            raise
+
+
+def merge_multimedia_payload(existing_media: object, new_media: dict[str, Any] | None) -> dict[str, Any] | list[Any] | None:
+    if not new_media:
+        return existing_media if isinstance(existing_media, (dict, list)) else None
+
+    if isinstance(existing_media, dict):
+        merged = dict(existing_media)
+        merged.update(new_media)
+        return merged
+
+    if isinstance(existing_media, list):
+        return {
+            "gallery": existing_media,
+            **new_media,
+        }
+
+    return new_media
+
+
+def should_refresh_description(existing_description: str | None, place: OSMPlace, refresh_embeddings: bool) -> bool:
+    if refresh_embeddings:
+        return True
+    cleaned_existing = clean_text(existing_description)
+    if not cleaned_existing:
+        return True
+    return len(cleaned_existing) < 40 and len(place.description) > len(cleaned_existing)
+
+
+async def update_existing_osm_poi(
+    db,
+    poi: POI,
+    place: OSMPlace,
+    category_ids: list[int],
+    embedding: list[float] | None,
+    *,
+    refresh_embeddings: bool,
+) -> None:
+    poi.name = place.name
+    if should_refresh_description(poi.description, place, refresh_embeddings):
+        poi.description = place.description
+    if embedding is not None:
+        poi.description_embedding = embedding
+    poi.location = from_text(f"POINT({place.longitude} {place.latitude})", srid=4326)
+    poi.access_type = place.access_type
+    poi.contact_phone = place.phone
+    poi.contact_email = place.email
+    poi.multimedia_urls = merge_multimedia_payload(poi.multimedia_urls, place.multimedia_urls)
+    poi.opening_hours_text = place.opening_hours_text
+    poi.visit_rules = place.visit_rules
+
+    await db.execute(delete(POICategory).where(POICategory.poi_id == poi.id))
+    for category_id in category_ids:
+        db.add(POICategory(poi_id=poi.id, category_id=category_id))
 
 
 def format_duration(seconds: float) -> str:
@@ -572,18 +1003,52 @@ async def import_place(
     category_map: dict[str, int],
     rate_limiter: EmbeddingRateLimiter,
     started_at: float,
-) -> bool:
+    *,
+    update_existing: bool,
+    refresh_embeddings: bool,
+) -> ImportStatus:
     eta = calculate_eta(started_at, position - 1, total)
     logger.info("Importando %s/%s: %s... ETA: %s", position, total, place.name, eta)
 
     try:
+        category_ids = [category_map[name] for name in place.category_names if name in category_map]
+
         async with AsyncSessionLocal() as db:
-            if await osm_poi_with_embedding_already_imported(db, place):
-                logger.info(
-                    "Checkpoint: omitido porque ya tenía embedding generado: %s",
-                    place.name,
+            existing_poi = await get_existing_osm_poi(db, place)
+            if existing_poi is not None:
+                if not update_existing:
+                    logger.info(
+                        "Checkpoint: omitido porque ya existía como POI OSM: %s",
+                        place.name,
+                    )
+                    return ImportStatus.SKIPPED
+
+                embedding: list[float] | None = None
+                description_needs_refresh = should_refresh_description(
+                    existing_poi.description,
+                    place,
+                    refresh_embeddings,
                 )
-                return False
+                if refresh_embeddings or existing_poi.description_embedding is None or description_needs_refresh:
+                    await rate_limiter.wait_turn()
+                    if embedding_service is None:
+                        raise RuntimeError("Embedding service is not initialized.")
+                    embedding = await embedding_service.get_embedding(place.description)
+
+                await update_existing_osm_poi(
+                    db,
+                    existing_poi,
+                    place,
+                    category_ids,
+                    embedding,
+                    refresh_embeddings=refresh_embeddings,
+                )
+                await db.commit()
+                if embedding is None:
+                    logger.info("Actualizado sin regenerar embedding: %s", place.name)
+                else:
+                    logger.info("Actualizado regenerando embedding: %s", place.name)
+                return ImportStatus.UPDATED
 
         await rate_limiter.wait_turn()
         if embedding_service is None:
@@ -591,7 +1056,6 @@ async def import_place(
 
         embedding = await embedding_service.get_embedding(place.description)
 
-        category_ids = [category_map[name] for name in place.category_names if name in category_map]
         poi_in = POICreate(
             nombre=place.name,
             descripcion=place.description,
@@ -614,13 +1078,20 @@ async def import_place(
                 entrepreneur_id=None,
             )
 
-        return True
+        return ImportStatus.CREATED
     except Exception as exc:  # noqa: BLE001
         logger.exception("Falló la importación de %s (%s/%s): %s", place.name, position, total, exc)
-        return False
+        return ImportStatus.FAILED
 
 
-async def process_places(elements: list[dict[str, Any]], batch_size: int, limit: int) -> None:
+async def process_places(
+    elements: list[dict[str, Any]],
+    batch_size: int,
+    limit: int,
+    *,
+    update_existing: bool,
+    refresh_embeddings: bool,
+) -> None:
     category_map = await ensure_categories()
     rate_limiter = EmbeddingRateLimiter(min_interval_seconds=EMBEDDING_DELAY_SECONDS)
 
@@ -649,8 +1120,10 @@ async def process_places(elements: list[dict[str, Any]], batch_size: int, limit:
         skipped_without_coords,
     )
 
-    imported = 0
-    not_imported = 0
+    created_total = 0
+    updated_total = 0
+    skipped_total = 0
+    failed_total = 0
     started_at = time.perf_counter()
 
     for batch_start in range(0, total, batch_size):
@@ -663,29 +1136,36 @@ async def process_places(elements: list[dict[str, Any]], batch_size: int, limit:
                 category_map=category_map,
                 rate_limiter=rate_limiter,
                 started_at=started_at,
+                update_existing=update_existing,
+                refresh_embeddings=refresh_embeddings,
             )
             for index, place in enumerate(batch)
         ]
         results = await asyncio.gather(*tasks)
-        imported += sum(1 for result in results if result)
-        not_imported += sum(1 for result in results if not result)
+        created_total += sum(1 for result in results if result == ImportStatus.CREATED)
+        updated_total += sum(1 for result in results if result == ImportStatus.UPDATED)
+        skipped_total += sum(1 for result in results if result == ImportStatus.SKIPPED)
+        failed_total += sum(1 for result in results if result == ImportStatus.FAILED)
 
         processed = min(batch_start + len(batch), total)
         logger.info(
-            "Progreso: %s/%s procesados | nuevos: %s | omitidos/fallidos: %s | ETA: %s",
+            "Progreso: %s/%s procesados | nuevos: %s | actualizados: %s | omitidos: %s | fallidos: %s | ETA: %s",
             processed,
             total,
-            imported,
-            not_imported,
+            created_total,
+            updated_total,
+            skipped_total,
+            failed_total,
             calculate_eta(started_at, processed, total),
         )
 
     logger.info(
-        "Ingesta finalizada. Importados nuevos: %s | Omitidos o fallidos: %s",
-        imported,
-        not_imported,
+        "Ingesta finalizada. Nuevos: %s | Actualizados: %s | Omitidos: %s | Fallidos: %s",
+        created_total,
+        updated_total,
+        skipped_total,
+        failed_total,
     )
-
 
 def configure_logging() -> None:
     logging.basicConfig(
@@ -710,6 +1190,30 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BATCH_SIZE,
         help=f"Cantidad de POIs a procesar en paralelo por lote (default: {DEFAULT_BATCH_SIZE}).",
     )
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help=(
+            "Actualiza POIs ya importados desde OSM en vez de omitirlos por checkpoint. "
+            "Útil para agregar nuevas categorías, visit_rules, opening_hours_text y osm_tags."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-embeddings",
+        action="store_true",
+        help=(
+            "Regenera embeddings de POIs OSM existentes. Solo tiene efecto junto a --update-existing; "
+            "los POIs nuevos siempre generan embedding."
+        ),
+    )
+    parser.add_argument(
+        "--delete-existing-osm",
+        action="store_true",
+        help=(
+            "Elimina primero los POIs cuyo multimedia_urls.source sea OpenStreetMap y luego importa desde cero. "
+            "Usar solo si quieres reconstruir la capa OSM; puede borrar relaciones históricas de esos POIs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -724,13 +1228,29 @@ async def main() -> None:
         raise ValueError("--limit debe ser mayor que cero.")
     if args.batch_size <= 0:
         raise ValueError("--batch-size debe ser mayor que cero.")
+    if args.refresh_embeddings and not args.update_existing:
+        logger.warning(
+            "--refresh-embeddings fue indicado sin --update-existing; solo se generarán embeddings para POIs nuevos."
+        )
+    if args.delete_existing_osm:
+        logger.warning(
+            "Modo destructivo acotado activado: se eliminarán POIs OSM antes de importar. "
+            "No se tocarán POIs manuales/no OSM."
+        )
+        await delete_existing_osm_pois()
 
     elements = await fetch_osm_elements(limit=args.limit)
     if not elements:
         logger.warning("Overpass no devolvió elementos para importar.")
         return
 
-    await process_places(elements=elements, batch_size=args.batch_size, limit=args.limit)
+    await process_places(
+        elements=elements,
+        batch_size=args.batch_size,
+        limit=args.limit,
+        update_existing=args.update_existing,
+        refresh_embeddings=args.refresh_embeddings,
+    )
 
 
 if __name__ == "__main__":

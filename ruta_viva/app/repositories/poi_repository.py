@@ -173,6 +173,7 @@ class POIRepository:
         lat: float,
         lon: float,
         radius_meters: float,
+        category_ids: list[int] | None = None,
     ) -> list[POIResponse]:
         reference_point = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
         poi_geography = cast(POI.location, Geography)
@@ -188,6 +189,11 @@ class POIRepository:
             .where(func.ST_DWithin(poi_geography, reference_geography, radius_meters))
             .order_by("distancia_metros")
         )
+        if category_ids:
+            matching_poi_ids = select(POICategory.poi_id).where(
+                POICategory.category_id.in_(category_ids)
+            )
+            stmt = stmt.where(POI.id.in_(matching_poi_ids))
 
         result = await db.execute(stmt)
         rows = result.all()
@@ -221,6 +227,7 @@ class POIRepository:
         radius_meters: float,
         query_embedding: list[float],
         user_interests_embedding: list[float] | None = None,
+        profile_weight: float = 0.3,
         limit: int = 5,
     ) -> list[POIResponse]:
         reference_point = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
@@ -229,9 +236,10 @@ class POIRepository:
         query_distance = POI.description_embedding.cosine_distance(query_embedding)
         ranking_score = query_distance
 
-        if user_interests_embedding is not None:
+        if user_interests_embedding is not None and profile_weight > 0.0:
             profile_distance = POI.description_embedding.cosine_distance(user_interests_embedding)
-            ranking_score = (query_distance * 0.7) + (profile_distance * 0.3)
+            query_weight = max(0.0, min(1.0, 1.0 - profile_weight))
+            ranking_score = (query_distance * query_weight) + (profile_distance * profile_weight)
 
         stmt = (
             select(

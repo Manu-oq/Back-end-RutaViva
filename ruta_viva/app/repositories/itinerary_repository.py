@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,9 @@ from app.models.poi import POI
 from app.models.poi_category import POICategory
 from app.schemas.itinerary import GeneratedItinerary, ItineraryResponse, ItineraryStepResponse, ItineraryStepUpdate
 from app.schemas.poi import POIResponse
+
+CHILE_TZ = ZoneInfo("America/Santiago")
+SPANISH_WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 
 
 class ItineraryRepository:
@@ -262,28 +266,53 @@ class ItineraryRepository:
         return await self.get_itinerary_by_id(db, itinerary_id, tourist_id)
 
     def _to_response(self, itinerary: Itinerary) -> ItineraryResponse:
+        start_date = itinerary.start_date
         return ItineraryResponse(
             id=itinerary.id,
             tourist_id=itinerary.tourist_id,
             title=itinerary.title,
-            start_date=itinerary.start_date,
+            start_date=start_date,
             end_date=itinerary.end_date,
             status=itinerary.status,
             steps=[
-                ItineraryStepResponse(
-                    id=step.id,
-                    itinerary_id=step.itinerary_id,
-                    poi_id=step.poi_id,
-                    poi_nombre=step.poi.name if step.poi is not None else None,
-                    poi_descripcion=step.poi.description if step.poi is not None else None,
-                    step_order=step.step_order,
-                    arrival_time=step.arrival_time,
-                    departure_time=step.departure_time,
-                    ai_context=step.ai_context,
-                )
+                self._step_to_response(step, start_date)
                 for step in itinerary.steps
             ],
         )
+
+    def _step_to_response(self, step: ItineraryStep, start_date: date | None) -> ItineraryStepResponse:
+        arrival_time = self._to_chile_time(step.arrival_time)
+        departure_time = self._to_chile_time(step.departure_time)
+        day_date = arrival_time.date() if arrival_time is not None else None
+        day_index = None
+        day_label = None
+
+        if day_date is not None:
+            if start_date is not None:
+                day_index = (day_date - start_date).days + 1
+            day_label = f"{SPANISH_WEEKDAYS[day_date.weekday()]} {day_date.day:02d}"
+
+        return ItineraryStepResponse(
+            id=step.id,
+            itinerary_id=step.itinerary_id,
+            poi_id=step.poi_id,
+            poi_nombre=step.poi.name if step.poi is not None else None,
+            poi_descripcion=step.poi.description if step.poi is not None else None,
+            step_order=step.step_order,
+            arrival_time=arrival_time,
+            departure_time=departure_time,
+            day_index=day_index,
+            day_date=day_date,
+            day_label=day_label,
+            ai_context=step.ai_context,
+        )
+
+    def _to_chile_time(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=CHILE_TZ)
+        return value.astimezone(CHILE_TZ)
 
     async def _get_itinerary_model(
         self,
