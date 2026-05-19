@@ -218,11 +218,26 @@ class ItineraryRepository:
             return None
 
         try:
+            remaining_steps = sorted(
+                [candidate for candidate in itinerary.steps if candidate.id != step_id],
+                key=lambda item: item.step_order,
+            )
+
             await db.delete(step)
             await db.flush()
 
-            remaining_steps = [candidate for candidate in itinerary.steps if candidate.id != step_id]
-            for index, remaining_step in enumerate(sorted(remaining_steps, key=lambda item: item.step_order), start=1):
+            # Two-phase reorder:
+            # The DB has a unique constraint on (itinerary_id, step_order). If we
+            # compact orders directly (for example 13 -> 12 while another row is
+            # still 12), PostgreSQL checks the constraint per statement/flush and
+            # can raise a transient UniqueViolation. Move all remaining rows to a
+            # temporary negative namespace first, flush, then assign the final
+            # compact positive order.
+            for index, remaining_step in enumerate(remaining_steps, start=1):
+                remaining_step.step_order = -index
+            await db.flush()
+
+            for index, remaining_step in enumerate(remaining_steps, start=1):
                 remaining_step.step_order = index
 
             await db.commit()
