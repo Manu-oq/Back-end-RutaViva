@@ -45,6 +45,7 @@ def _build_trip_days(
         existing["day_index"] = index
         existing["day_date"] = day_key
         existing["day_label"] = f"{WEEKDAY_NAMES[current.weekday()].capitalize()} {current.day:02d}"
+        existing["status"] = existing.get("status") or ("in_progress" if index == 1 else "pending")
         existing.setdefault("base_area", None)
         existing.setdefault("lodging", None)
         existing.setdefault("meal_preferences", [])
@@ -411,8 +412,93 @@ def ensure_trip_draft(
     existing.setdefault("activity_plan", [])
     existing.setdefault("selected_pois", [])
     existing.setdefault("weather_policy", {"default": "adapt_to_weather", "overrides": []})
+    existing.setdefault("current_day_focus", 0)
+    existing.setdefault("lodging", None)
+    existing.setdefault("lodging_disclaimer_shown", False)
     updated["trip_draft"] = existing
     return updated
+
+
+def advance_day(
+    preferences: dict[str, Any],
+    target_day_index: int | None = None,
+) -> dict[str, Any]:
+    updated = dict(preferences)
+    draft = dict(updated.get("trip_draft") or {})
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    if not trip_days:
+        return updated
+
+    current_index = draft.get("current_day_focus", 0)
+    if 0 <= current_index < len(trip_days):
+        current_day = trip_days[current_index]
+        has_activities = bool(
+            current_day.get("selected_pois") or current_day.get("meal_preferences") or current_day.get("activity_preferences")
+        )
+        if has_activities:
+            trip_days[current_index]["status"] = "completed"
+        elif current_day.get("status") != "skipped":
+            trip_days[current_index]["status"] = "light"
+
+    if target_day_index is not None:
+        next_index = target_day_index
+    else:
+        next_index = current_index + 1
+
+    next_index = max(0, min(next_index, len(trip_days) - 1))
+    if trip_days[next_index]["status"] == "pending":
+        trip_days[next_index]["status"] = "in_progress"
+
+    draft["current_day_focus"] = next_index
+    draft["trip_days"] = trip_days
+    updated["trip_draft"] = draft
+    return updated
+
+
+def skip_day(
+    preferences: dict[str, Any],
+    target_day_index: int,
+) -> dict[str, Any]:
+    updated = dict(preferences)
+    draft = dict(updated.get("trip_draft") or {})
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    if 0 <= target_day_index < len(trip_days):
+        trip_days[target_day_index]["status"] = "skipped"
+    draft["trip_days"] = trip_days
+    updated["trip_draft"] = draft
+    return updated
+
+
+def set_lodging(
+    preferences: dict[str, Any],
+    poi_id: str,
+    name: str,
+    mode: str | list[int],
+) -> dict[str, Any]:
+    updated = dict(preferences)
+    draft = dict(updated.get("trip_draft") or {})
+    draft["lodging"] = {"poi_id": str(poi_id), "name": name, "mode": mode}
+    updated["trip_draft"] = draft
+    return updated
+
+
+def get_current_day(preferences: dict[str, Any]) -> dict[str, Any] | None:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    index = draft.get("current_day_focus", 0)
+    if 0 <= index < len(trip_days):
+        return trip_days[index]
+    return None
+
+
+def has_lodging(preferences: dict[str, Any]) -> bool:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    return bool(draft.get("lodging"))
+
+
+def get_lodging_info(preferences: dict[str, Any]) -> dict[str, Any] | None:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    return draft.get("lodging")
 
 
 def update_trip_draft_from_message(
