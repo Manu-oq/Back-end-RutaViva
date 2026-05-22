@@ -81,6 +81,18 @@ class AraPreferenceSummary(BaseModel):
     route_ready_score: float = 0.0
 
 
+class AraCandidatePOI(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    category_ids: list[int] = Field(default_factory=list)
+    latitude: float | None = None
+    longitude: float | None = None
+    image_url: str | None = None
+    distance_meters: float | None = None
+    poi_role: str | None = None
+
+
 class AraSessionResponse(BaseModel):
     session_id: UUID
     status: str
