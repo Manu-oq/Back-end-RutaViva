@@ -798,26 +798,16 @@ def build_description(name: str, tags: dict[str, str]) -> str:
 
     place_type = describe_place_type(tags)
     locality = clean_text(tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:state"))
-    opening_hours = clean_text(tags.get("opening_hours"))
     cuisine = clean_text(tags.get("cuisine"))
     operator = clean_text(tags.get("operator"))
-    tag_summary = [
-        f"{key}={value}"
-        for key in ("tourism", "amenity", "natural", "leisure", "historic", "shop", "route")
-        if (value := clean_text(tags.get(key)))
-    ]
 
     base = f"{name} es un {place_type} ubicado en la Región de La Araucanía, Chile."
     if locality:
         base += f" Se ubica o referencia en el sector de {locality}."
     if cuisine:
-        base += f" La información OSM indica cocina o especialidad: {cuisine.replace(';', ', ')}."
+        base += f" Se destaca por su cocina o especialidad en {cuisine.replace(';', ', ')}."
     if operator:
-        base += f" Operador informado: {operator}."
-    if tag_summary:
-        base += f" Clasificación OSM relevante: {', '.join(tag_summary[:4])}."
-    if opening_hours:
-        base += f" Horario informado en OSM: {opening_hours}."
+        base += f" Operado por {operator}."
     return base
 
 

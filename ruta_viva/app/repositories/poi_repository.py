@@ -419,6 +419,7 @@ class POIRepository(BaseRepository):
                 func.coalesce(func.count(Review.id), 0).label("review_count"),
                 func.coalesce(func.count(POIVisit.id), 0).label("visit_count"),
             )
+            .select_from(POI)
             .outerjoin(POICategory, POICategory.poi_id == POI.id)
             .outerjoin(Review, Review.poi_id == POI.id)
             .outerjoin(POIVisit, POIVisit.poi_id == POI.id)

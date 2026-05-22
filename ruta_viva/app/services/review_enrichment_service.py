@@ -45,6 +45,9 @@ async def generate_review_embedding_and_update_profile(
             if review.text_embedding is not None:
                 return
 
+            if not review.text_content:
+                return
+
             tourist_profile = await db.get(TouristProfile, review.tourist_id)
             if tourist_profile is None:
                 return

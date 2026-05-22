@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ReviewCreate(BaseModel):
     poi_id: UUID
     rating_stars: int = Field(ge=1, le=5)
-    text_content: str = Field(min_length=1, max_length=5000)
+    text_content: str | None = Field(default=None, max_length=5000)
 
 
 class ReviewUpdate(BaseModel):

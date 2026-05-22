@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from sqlalchemy import select
@@ -29,6 +30,22 @@ async def get_category_ids_batch(db: AsyncSession, poi_ids: list[UUID]) -> dict[
     return mapping
 
 
+_OSM_METADATA_PATTERNS = [
+    re.compile(r"\s*Clasificaci[óo]n OSM relevante:\s*[^.]*\.?"),
+    re.compile(r"\s*Horario informado en OSM:\s*[^.]*\.?"),
+    re.compile(r"\s*La informaci[óo]n OSM indica[^.]*\.?"),
+    re.compile(r"\s*Operador informado:\s*[^.]*\.?"),
+]
+
+
+def sanitize_description(description: str | None) -> str | None:
+    if not description:
+        return description
+    for pattern in _OSM_METADATA_PATTERNS:
+        description = pattern.sub("", description)
+    return description.strip()
+
+
 def build_poi_response_from_row(
     poi,
     latitude: float,
@@ -39,7 +56,7 @@ def build_poi_response_from_row(
     return POIResponse(
         id=poi.id,
         name=poi.name,
-        description=poi.description,
+        description=sanitize_description(poi.description),
         access_type=poi.access_type,
         contact_phone=poi.contact_phone,
         contact_email=poi.contact_email,

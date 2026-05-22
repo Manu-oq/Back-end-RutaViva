@@ -37,7 +37,7 @@ class Review(Base):
         index=True,
     )
     rating_stars: Mapped[int] = mapped_column(Integer, nullable=False)
-    text_content: Mapped[str] = mapped_column(Text, nullable=False)
+    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     text_embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
