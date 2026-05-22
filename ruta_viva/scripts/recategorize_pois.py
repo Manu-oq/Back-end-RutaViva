@@ -45,25 +45,45 @@ def contains_any(text: str, keywords: tuple[str, ...]) -> bool:
 def infer_categories(name: str, description: str) -> list[str]:
     text = f"{name} {description}".lower()
     categories: list[str] = []
+    has_lodging = contains_any(text, LODGING_KEYWORDS)
+    has_food = contains_any(text, FOOD_KEYWORDS)
+    has_info = contains_any(text, INFO_KEYWORDS)
+    has_transport = any(kw in text for kw in ("embarcadero", "muelle", "puerto", "terminal", "aeropuerto"))
 
-    if contains_any(text, INFO_KEYWORDS):
+    if has_info:
         categories.append("Servicios turísticos/Información")
-    if contains_any(text, FOOD_KEYWORDS):
+    if has_food:
         categories.append("Gastronomía")
-    if contains_any(text, LODGING_KEYWORDS):
+    if has_lodging:
         categories.append("Alojamiento")
+    if has_transport:
+        categories.append("Transporte/Accesos")
+
+    is_leisure_or_service = has_lodging or has_food or has_info or has_transport
+
     if contains_any(text, THERMAL_KEYWORDS):
-        categories.extend(["Termas/Bienestar", "Naturaleza"])
+        categories.append("Termas/Bienestar")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
     if contains_any(text, WATER_KEYWORDS):
-        categories.extend(["Lagos/Ríos/Playas", "Naturaleza"])
+        categories.append("Lagos/Ríos/Playas")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
     if contains_any(text, VOLCANO_KEYWORDS):
-        categories.extend(["Montañas/Volcanes/Miradores", "Naturaleza"])
+        categories.append("Montañas/Volcanes/Miradores")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
     if contains_any(text, TREKKING_KEYWORDS):
-        categories.extend(["Trekking/Senderismo", "Naturaleza"])
+        categories.append("Trekking/Senderismo")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
     if contains_any(text, PARK_KEYWORDS):
-        categories.extend(["Parques/Reservas", "Naturaleza"])
+        categories.append("Parques/Reservas")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
     if contains_any(text, CULTURE_KEYWORDS):
-        categories.extend(["Museos/Patrimonio", "Cultura"])
+        categories.append("Museos/Patrimonio")
+        categories.append("Cultura")
     if contains_any(text, CRAFT_KEYWORDS):
         categories.append("Artesanía/Compras locales")
 

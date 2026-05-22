@@ -547,7 +547,7 @@ def repair_schedule_and_category_issues(
             previous_primary_category = primary_category
 
             should_replace_gastro = is_gastronomy(poi) and (
-                not preferred_time_for_gastronomy(step.arrival_time) or gastronomy_seen >= 2
+                not preferred_time_for_gastronomy(step.arrival_time) or gastronomy_seen >= 3
             )
             should_replace_repeated_category = (
                 primary_category is not None and consecutive_category_counts[primary_category] > 2
@@ -577,7 +577,7 @@ def repair_schedule_and_category_issues(
                     original_poi_id=original_poi_id,
                 )
                 used_ids.add(replacement.id)
-            elif should_replace_gastro and gastronomy_seen >= 2:
+            elif should_replace_gastro and gastronomy_seen >= 3:
                 fallback_replacement = next(
                     (
                         candidate
@@ -732,7 +732,7 @@ def validate_generated_itinerary_rules(
 
             if is_gastronomy(poi):
                 gastronomy_count += 1
-                if gastronomy_count > 2 and not allows_repeated_pois_or_patterns(payload.query):
+                if gastronomy_count > 3 and not allows_repeated_pois_or_patterns(payload.query):
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="The LLM saturated a day with too many gastronomy stops.",

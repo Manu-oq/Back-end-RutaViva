@@ -1077,6 +1077,7 @@ async def _handle_reset_or_new_trip(
 async def _handle_generate_request(
     db: AsyncSession,
     session: Any,
+    current_user: User,
     payload: AraMessageCreate,
     previous_preferences: dict[str, Any],
     previous_intent: dict[str, Any],
@@ -1572,7 +1573,7 @@ async def handle_message(
 
     if turn_type == "generate_request":
         return await _handle_generate_request(
-            db, session, payload, previous_preferences, previous_intent,
+            db, session, current_user, payload, previous_preferences, previous_intent,
             session_id, turn_count, turn_classification, llm_client,
         )
 
