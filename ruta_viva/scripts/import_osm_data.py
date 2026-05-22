@@ -827,7 +827,7 @@ def build_multimedia_payload(element: dict[str, Any], tags: dict[str, str]) -> d
 
     if website:
         payload["website"] = website
-    if image:
+    if image and (image.startswith("http://") or image.startswith("https://")):
         payload["image"] = image
         payload["cover"] = image
         payload["gallery"] = [image]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -46,6 +47,25 @@ def sanitize_description(description: str | None) -> str | None:
     return description.strip()
 
 
+def _is_valid_image_url(url: str | None) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def sanitize_multimedia_urls(multimedia: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not multimedia or not isinstance(multimedia, dict):
+        return multimedia
+    cleaned = dict(multimedia)
+    for key in ("cover", "image", "image_url"):
+        if key in cleaned and not _is_valid_image_url(cleaned.get(key)):
+            cleaned[key] = None
+    gallery = cleaned.get("gallery")
+    if isinstance(gallery, list):
+        cleaned["gallery"] = [url for url in gallery if _is_valid_image_url(url)]
+    return cleaned
+
+
 def build_poi_response_from_row(
     poi,
     latitude: float,
@@ -60,7 +80,7 @@ def build_poi_response_from_row(
         access_type=poi.access_type,
         contact_phone=poi.contact_phone,
         contact_email=poi.contact_email,
-        multimedia_urls=poi.multimedia_urls,
+        multimedia_urls=sanitize_multimedia_urls(poi.multimedia_urls),
         opening_hours_text=poi.opening_hours_text,
         visit_rules=poi.visit_rules,
         category_ids=category_ids,

@@ -166,7 +166,9 @@ def _build_candidate_poi(poi: Any) -> AraCandidatePOI:
     multimedia_urls = getattr(poi, "multimedia_urls", None) or {}
     image_url = None
     if isinstance(multimedia_urls, dict):
-        image_url = multimedia_urls.get("image_url")
+        candidate_url = multimedia_urls.get("image_url") or multimedia_urls.get("cover") or multimedia_urls.get("image")
+        if isinstance(candidate_url, str) and (candidate_url.startswith("http://") or candidate_url.startswith("https://")):
+            image_url = candidate_url
     elif isinstance(multimedia_urls, list) and multimedia_urls:
         image_url = str(multimedia_urls[0])
     return AraCandidatePOI(
@@ -1545,17 +1547,22 @@ async def handle_message(
     if turn_type == "candidate_selection":
         selected_poi_id = extract_candidate_selection(payload.message)
         if selected_poi_id is None:
-            logger.warning("Invalid candidate selection session_id=%s message=%.100r", session_id, payload.message)
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid candidate selection.")
-        selected_poi = await poi_repository.get_poi_by_id(db, selected_poi_id)
-        if selected_poi is None:
-            logger.warning("Selected POI not found poi_id=%s", selected_poi_id)
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected POI not found.")
-        return await _handle_candidate_selection(
-            db, session, current_user, payload, session_id, turn_count,
-            turn_classification, selected_poi_id, selected_poi,
-            previous_preferences, previous_intent, llm_client,
-        )
+            logger.warning(
+                "Candidate selection classified but no UUID found session_id=%s message=%.100r",
+                session_id, payload.message,
+            )
+            turn_type = "refinement"
+            turn_classification["turn_type"] = "refinement"
+        else:
+            selected_poi = await poi_repository.get_poi_by_id(db, selected_poi_id)
+            if selected_poi is None:
+                logger.warning("Selected POI not found poi_id=%s", selected_poi_id)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected POI not found.")
+            return await _handle_candidate_selection(
+                db, session, current_user, payload, session_id, turn_count,
+                turn_classification, selected_poi_id, selected_poi,
+                previous_preferences, previous_intent, llm_client,
+            )
 
     if turn_type == "reset_or_new_trip":
         return await _handle_reset_or_new_trip(
