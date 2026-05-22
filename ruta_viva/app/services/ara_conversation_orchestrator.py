@@ -1666,7 +1666,6 @@ async def generate_itinerary_from_session(
     embedding_service: OpenAIEmbeddingService,
     llm_service: ItineraryGenerator,
 ) -> AraGenerateItineraryResponse:
-    from app.api.deps import get_current_user
     import time as _time
     _phase_start = _time.monotonic()
     logger.info("Itinerary generation START session_id=%s user_id=%s", session_id, current_user.id)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -25,13 +24,10 @@ from app.schemas.ara import (
 from app.services.ara_conversation_orchestrator import (
     ara_repository,
     create_session,
-    extract_replacement_request_from_metadata,
     generate_itinerary_from_session,
     handle_message,
     itinerary_repository,
-    normalize_dates,
     run_ara_itinerary_generation_job,
-    session_message_response,
 )
 from app.services.ara_chat_service import AraChatService, get_ara_chat_service
 from app.services.ara_streaming_service import stream_itinerary_generation

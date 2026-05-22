@@ -10,13 +10,17 @@ from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.itinerary import (
     GenerateItineraryRequest,
+    ItineraryExportResponse,
     ItineraryResponse,
+    ItineraryStatusUpdate,
+    ItineraryStepCreate,
     ItineraryStepUpdate,
     ItineraryStepWeatherResponse,
     PaginatedItineraryResponse,
     ReorderItineraryStepsRequest,
     ReorderStepsWithTimesRequest,
     RescheduleStepRequest,
+    ShareResponse,
     StepVisitRequest,
     StepVisitResponse,
 )

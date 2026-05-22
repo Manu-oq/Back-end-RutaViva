@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bookmark import Bookmark
 from app.models.poi import POI
-from app.models.poi_category import POICategory
+
 from app.models.tourist_profile import TouristProfile
 from app.repositories.base import BaseRepository
 from app.repositories.utils import build_poi_response_from_row, get_category_ids_batch
