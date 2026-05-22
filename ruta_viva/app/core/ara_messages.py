@@ -341,6 +341,75 @@ class AraMessages:
                 "{description}, {temp}°C."
             ),
             "general_error": "Ups, tuve un problema. ¿Podemos intentarlo de nuevo?",
+            # ============================================================
+            # Day-aware flow (nuevo -- Camino C Hibrido)
+            # ============================================================
+            "cta_que_arme_ara": "Que lo arme Ara",
+            "cta_pasemos_al": "Pasemos al {day}",
+            "cta_otro_dia": "Otro dia",
+            "cta_si_mas_actividades": "Si, mas actividades",
+            "cta_empezar_alojamiento": "Alojamiento",
+            "cta_empezar_actividades": "Actividades",
+            "cta_sin_preferencias": "Sin preferencias",
+            "lodging_disclaimer": (
+                "Los alojamientos son sugerencias para tu itinerario. "
+                "Las reservas, precios y disponibilidad las gestionas por tu cuenta. "
+                "Ruta Viva no realiza reservas ni garantiza disponibilidad."
+            ),
+            "lodging_ask_if_needed": (
+                "Ya tenes donde alojarte o queres que busque opciones?"
+            ),
+            "lodging_already_have": "Ya tengo donde",
+            "lodging_buscar_opciones": "Buscar opciones",
+            "lodging_no_needed": "No necesito",
+            "lodging_ask_mode": (
+                "Te quedas en {name} todos los dias o solo algunos?"
+            ),
+            "lodging_mode_all": "Todos los dias",
+            "lodging_mode_single": "Solo el {day}",
+            "lodging_mode_weekend": "El finde nomas",
+            "lodging_selected": (
+                "Perfecto. {name} queda como alojamiento{detail}."
+            ),
+            "day_greeting_with_weather": (
+                "{day}. {weather_summary}"
+            ),
+            "day_what_to_do": "Que hacemos el {day}?",
+            "day_empty_warning": (
+                "Este dia esta sin actividades planificadas. "
+                "Queres que te recomiende algo o lo dejamos libre?"
+            ),
+            "day_skip_confirm": (
+                "El {day} todavia no tiene actividades. "
+                "Seguro que pasamos al siguiente?"
+            ),
+            "day_skip_yes": "Si, dejarlo vacio",
+            "day_skip_no": "No, mejor sigo con {day}",
+            "day_free": "Dejarlo libre",
+            "day_recommend": "Recomiendame algo",
+            "progress_lodging": "Alojamiento: {name}",
+            "progress_day_in_progress": "{label}: en progreso",
+            "progress_day_completed": "{label}: completado",
+            "progress_day_pending": "{label}: pendiente",
+            "progress_day_skipped": "{label}: sin actividades",
+            "que_arme_ara_food_pref": (
+                "Dale. Antes de armar todo, alguna preferencia de comida?"
+            ),
+            "que_arme_ara_generating": (
+                "Perfecto, estoy armando tu itinerario. "
+                "Te aviso en unos momentos."
+            ),
+            "que_arme_ara_done": (
+                "Listo. Arme tu itinerario con {steps} actividades en {days} dias. "
+                "Queres ajustar algo?"
+            ),
+            "replacement_same_category": (
+                "Encontre estas alternativas de {category} para reemplazar {name}:"
+            ),
+            "destination_expanded_warning": (
+                "Amplie la busqueda fuera de {original}. "
+                "Los lugares de {expanded} estan a {km} km aproximadamente."
+            ),
         },
     }
 
