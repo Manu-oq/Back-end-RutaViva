@@ -11,10 +11,13 @@ from openai import AsyncOpenAI
 from app.core.ara_constants import (
     ADVENTURE_TERMS,
     CULTURE_TERMS,
+    FOCUS_DAY_TERMS,
     FOOD_TERMS,
     GENERATE_TERMS,
     ITINERARY_ID_PATTERN,
     LOCATION_PATTERN,
+    LODGING_MODE_TERMS,
+    LODGING_REQUEST_TERMS,
     LODGING_TERMS,
     NATURE_TERMS,
     REFINEMENT_TERMS,
@@ -22,6 +25,7 @@ from app.core.ara_constants import (
     REST_TERMS,
     SELECT_POI_PATTERN,
     SHOW_OPTIONS_TERMS,
+    SKIP_DAY_TERMS,
     SPECIFIC_FOOD_TERMS,
     STEP_ID_PATTERN,
     SURPRISE_ROUTE_TERMS,
@@ -36,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 _CLASSIFICATION_PROMPT = (
     "Eres un clasificador de intenciones para un asistente de viajes turisticos en La Araucania, Chile.\n"
+    "El asistente planifica el viaje DIA por DIA. El usuario puede navegar entre dias, pedir alojamiento, y definir preferencias.\n"
     "Debes clasificar el mensaje del usuario en UNO de los siguientes tipos de turno:\n"
     "\n"
     "1. replace_step: El usuario quiere reemplazar un paso especifico de un itinerario existente.\n"
@@ -62,6 +67,18 @@ _CLASSIFICATION_PROMPT = (
     "8. general_chat: Conversacion general o amable que no calza en los tipos anteriores.\n"
     "   Ejemplos: \"hola\", \"gracias\", \"que tal\", \"oye y tu que recomiendas?\"\n"
     "\n"
+    "9. skip_day: El usuario quiere avanzar al siguiente dia de planificacion.\n"
+    "   Ejemplos: \"pasemos al sabado\", \"siguiente dia\", \"avancemos al domingo\", \"ya, siguiente\"\n"
+    "\n"
+    "10. focus_day: El usuario quiere volver a un dia especifico de la planificacion.\n"
+    "   Ejemplos: \"volvamos al viernes\", \"cambiemos al lunes\", \"quiero planificar el dia 2\", \"el sabado\"\n"
+    "\n"
+    "11. lodging_request: El usuario quiere buscar alojamiento o preguntar sobre donde dormir.\n"
+    "   Ejemplos: \"buscar alojamiento\", \"donde puedo dormir?\", \"quiero ver hoteles\", \"que cabanas hay?\"\n"
+    "\n"
+    "12. lodging_mode: El usuario define para que dias aplica el alojamiento que eligio.\n"
+    "   Ejemplos: \"todos los dias\", \"solo el viernes\", \"solo el sabado\", \"viernes y sabado\", \"el fin de semana nomas\"\n"
+    "\n"
     "Ademas extrae la siguiente informacion adicional del mensaje:\n"
     "- primary_intent: La intencion principal (meal, activity, lodging, info, nature, culture, general)\n"
     "- specificity: Que tan especifica es la solicitud (vague, specific, explicit)\n"
@@ -71,8 +88,8 @@ _CLASSIFICATION_PROMPT = (
     "\n"
     "Responde SOLO con JSON valido en este formato exacto, sin texto adicional:\n"
     "{\n"
-    '  "turn_type": "replace_step",\n'
-    '  "topic": "replace_step",\n'
+    '  "turn_type": "skip_day",\n'
+    '  "topic": "day_navigation",\n'
     '  "primary_intent": "general",\n'
     '  "specificity": "vague",\n'
     '  "locations": [],\n'
@@ -271,6 +288,14 @@ async def classify_turn(
         return {"turn_type": "refinement", "topic": "surprise_route", "confidence": "high_rule_based"}
     if any(term in normalized for term in SHOW_OPTIONS_TERMS):
         return {"turn_type": "show_options", "topic": "options", "confidence": "high_rule_based"}
+    if any(term in normalized for term in SKIP_DAY_TERMS):
+        return {"turn_type": "skip_day", "topic": "day_navigation", "confidence": "high_rule_based"}
+    if any(term in normalized for term in FOCUS_DAY_TERMS):
+        return {"turn_type": "focus_day", "topic": "day_navigation", "confidence": "high_rule_based"}
+    if any(term in normalized for term in LODGING_MODE_TERMS):
+        return {"turn_type": "lodging_mode", "topic": "lodging", "confidence": "high_rule_based"}
+    if any(term in normalized for term in LODGING_REQUEST_TERMS):
+        return {"turn_type": "lodging_request", "topic": "lodging", "confidence": "high_rule_based"}
 
     topic = _detect_question_topic(normalized)
     has_refinement = any(term in normalized for term in REFINEMENT_TERMS)
