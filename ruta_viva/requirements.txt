@@ -15,3 +15,9 @@ python-jose[cryptography]
 python-multipart
 requests
 httpx
+cachetools
+slowapi
+pytest
+pytest-asyncio
+pytest
+pytest-asyncio

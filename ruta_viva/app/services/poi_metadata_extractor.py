@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
 
@@ -128,12 +128,12 @@ def merge_enrichment_into_visit_rules(
             {
                 "url": source_url,
                 "provider": provider,
-                "fetched_at": datetime.utcnow().isoformat(),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "confidence": confidence,
             }
         )
     enrichment["sources"] = sources
-    enrichment["last_enriched_at"] = datetime.utcnow().isoformat()
+    enrichment["last_enriched_at"] = datetime.now(timezone.utc).isoformat()
     rules["enrichment"] = enrichment
 
     if extracted.opening_hours_structured:
@@ -375,7 +375,7 @@ def _evidence(field: str, provider: str, source_url: str | None, evidence_level:
         "provider": provider,
         "source_url": source_url,
         "evidence_level": evidence_level,
-        "observed_at": datetime.utcnow().isoformat(),
+        "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

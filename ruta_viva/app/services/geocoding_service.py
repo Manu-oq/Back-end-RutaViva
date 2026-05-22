@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from app.core.http_client import get_client
 from app.schemas.geocoding import GeocodingResult
 
 
@@ -31,9 +32,9 @@ async def search_places(
 
     headers = {"User-Agent": "RutaVivaBackend/0.1 (geocoding)"}
 
-    async with httpx.AsyncClient(timeout=NOMINATIM_TIMEOUT_SECONDS) as client:
-        response = await client.get(NOMINATIM_SEARCH_URL, params=params, headers=headers)
-        response.raise_for_status()
+    client = get_client("nominatim", base_url=NOMINATIM_SEARCH_URL, timeout=NOMINATIM_TIMEOUT_SECONDS)
+    response = await client.get("", params=params, headers=headers)
+    response.raise_for_status()
 
     results: list[GeocodingResult] = []
     for item in response.json():

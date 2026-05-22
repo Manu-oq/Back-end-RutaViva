@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,7 +18,10 @@ if TYPE_CHECKING:
 
 class Review(Base):
     __tablename__ = "reviews"
-    __table_args__ = (CheckConstraint("rating_stars BETWEEN 1 AND 5", name="ck_reviews_rating_stars"),)
+    __table_args__ = (
+        CheckConstraint("rating_stars BETWEEN 1 AND 5", name="ck_reviews_rating_stars"),
+        UniqueConstraint("tourist_id", "poi_id", name="uq_reviews_tourist_poi"),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     tourist_id: Mapped[UUID] = mapped_column(

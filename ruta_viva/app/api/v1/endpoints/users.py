@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.rut import validate_rut
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
@@ -69,6 +70,12 @@ async def activate_my_entrepreneur_profile(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> EntrepreneurProfileResponse:
+    if payload.rut is not None and not validate_rut(payload.rut):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="RUT inválido. Formato esperado: 12345678-9",
+        )
+
     entrepreneur_profile = await user_repository.ensure_entrepreneur_profile(
         db,
         user_id=current_user.id,

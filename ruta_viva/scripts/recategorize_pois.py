@@ -121,6 +121,25 @@ def infer_visit_rules(name: str, description: str, categories: list[str]) -> dic
     return rules
 
 
+def merge_visit_rules(existing: dict[str, Any] | None, inferred: dict[str, Any]) -> dict[str, Any]:
+    """Merge inferred rules without discarding richer import/enrichment metadata."""
+    merged = dict(existing or {})
+
+    for key, value in inferred.items():
+        if value is None and key in merged:
+            continue
+        if key == "confidence" and merged.get("confidence") == "known" and value == "inferred":
+            continue
+        merged[key] = value
+
+    if existing and existing.get("blocked_for_itinerary") and "blocked_for_itinerary" not in inferred:
+        merged["blocked_for_itinerary"] = True
+        if existing.get("block_reason"):
+            merged["block_reason"] = existing["block_reason"]
+
+    return merged
+
+
 async def load_category_map() -> dict[str, int]:
     await init_db()
     async with AsyncSessionLocal() as db:
@@ -139,7 +158,10 @@ async def recategorize() -> None:
         for poi in pois:
             categories = infer_categories(poi.name, poi.description)
             category_ids = [category_map[name] for name in categories if name in category_map]
-            poi.visit_rules = infer_visit_rules(poi.name, poi.description, categories)
+            poi.visit_rules = merge_visit_rules(
+                poi.visit_rules,
+                infer_visit_rules(poi.name, poi.description, categories),
+            )
 
             await db.execute(delete(POICategory).where(POICategory.poi_id == poi.id))
             for category_id in category_ids:

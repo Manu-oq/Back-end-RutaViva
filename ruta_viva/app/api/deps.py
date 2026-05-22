@@ -32,6 +32,8 @@ async def get_current_user(
         token_data = TokenPayload(sub=payload.get("sub"))
         if token_data.sub is None:
             raise credentials_exception
+        if payload.get("iss") != "ruta-viva":
+            raise credentials_exception
         user_id = UUID(token_data.sub)
     except (JWTError, ValueError):
         raise credentials_exception
@@ -52,6 +54,8 @@ async def get_optional_current_user(
 
     try:
         payload = jwt.decode(token.credentials, settings.secret_key, algorithms=[settings.algorithm])
+        if payload.get("iss") != "ruta-viva":
+            return None
         token_data = TokenPayload(sub=payload.get("sub"))
         if token_data.sub is None:
             return None

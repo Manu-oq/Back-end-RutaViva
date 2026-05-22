@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
+from app.core.time_utils import CHILE_TZ, to_chile_timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,15 +11,22 @@ from sqlalchemy.orm import selectinload
 from app.models.itinerary import Itinerary
 from app.models.itinerary_step import ItineraryStep
 from app.models.poi import POI
-from app.models.poi_category import POICategory
-from app.schemas.itinerary import GeneratedItinerary, ItineraryResponse, ItineraryStepResponse, ItineraryStepUpdate
+from app.repositories.base import BaseRepository
+from app.repositories.utils import build_poi_response_from_row, get_category_ids_batch
+from app.schemas.itinerary import (
+    GeneratedItinerary,
+    ItineraryResponse,
+    ItineraryStepResponse,
+    ItineraryStepUpdate,
+    ReorderStepsWithTimesRequest,
+    RescheduleStepRequest,
+)
 from app.schemas.poi import POIResponse
 
-CHILE_TZ = ZoneInfo("America/Santiago")
 SPANISH_WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 
 
-class ItineraryRepository:
+class ItineraryRepository(BaseRepository):
     async def create_generated_itinerary(
         self,
         db: AsyncSession,
@@ -53,16 +60,15 @@ class ItineraryRepository:
                     )
                 )
 
-            await db.commit()
+            await self._commit_or_rollback(db)
         except Exception:
             await db.rollback()
             raise
 
-        itinerary_response = await self.get_itinerary_by_id(db, itinerary.id)
-        if itinerary_response is None:
-            raise RuntimeError("Generated itinerary was persisted but could not be reloaded.")
-
-        return itinerary_response
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
 
     async def get_itinerary_by_id(
         self,
@@ -111,7 +117,7 @@ class ItineraryRepository:
                 .where(Itinerary.id == itinerary_id)
                 .where(Itinerary.tourist_id == tourist_id)
             )
-            await db.commit()
+            await self._commit_or_rollback(db)
         except Exception:
             await db.rollback()
             raise
@@ -124,14 +130,6 @@ class ItineraryRepository:
         itinerary_id: UUID,
         tourist_id: UUID,
     ) -> list[POIResponse] | None:
-        itinerary_exists = await db.execute(
-            select(Itinerary.id)
-            .where(Itinerary.id == itinerary_id)
-            .where(Itinerary.tourist_id == tourist_id)
-        )
-        if itinerary_exists.scalar_one_or_none() is None:
-            return None
-
         stmt = (
             select(
                 POI,
@@ -139,29 +137,28 @@ class ItineraryRepository:
                 func.ST_X(POI.location).label("longitude"),
             )
             .join(ItineraryStep, ItineraryStep.poi_id == POI.id)
+            .join(Itinerary, Itinerary.id == ItineraryStep.itinerary_id)
             .where(ItineraryStep.itinerary_id == itinerary_id)
+            .where(Itinerary.tourist_id == tourist_id)
             .order_by(ItineraryStep.step_order.asc())
         )
         result = await db.execute(stmt)
+        rows = result.all()
+        if not rows:
+            exists_stmt = select(Itinerary.id).where(
+                Itinerary.id == itinerary_id,
+                Itinerary.tourist_id == tourist_id,
+            )
+            exists_result = await db.execute(exists_stmt)
+            if exists_result.scalar_one_or_none() is None:
+                return None
+            return []
 
+        category_map = await get_category_ids_batch(db, [poi.id for poi, _, _ in rows])
         responses: list[POIResponse] = []
-        for poi, latitude, longitude in result.all():
-            category_ids = await self._get_category_ids(db, poi.id)
+        for poi, latitude, longitude in rows:
             responses.append(
-                POIResponse(
-                    id=poi.id,
-                    nombre=poi.name,
-                    descripcion=poi.description,
-                    tipo_acceso=poi.access_type,
-                    telefono_publico=poi.contact_phone,
-                    email_publico=poi.contact_email,
-                    multimedia_urls=poi.multimedia_urls,
-                    opening_hours_text=poi.opening_hours_text,
-                    visit_rules=poi.visit_rules,
-                    category_ids=category_ids,
-                    latitude=float(latitude),
-                    longitude=float(longitude),
-                )
+                build_poi_response_from_row(poi, latitude, longitude, category_map.get(poi.id, []))
             )
 
         return responses
@@ -194,13 +191,12 @@ class ItineraryRepository:
         if step_in.ai_context is not None:
             step.ai_context = step_in.ai_context
 
-        try:
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)
 
-        return await self.get_itinerary_by_id(db, itinerary_id, tourist_id)
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
 
     async def delete_step(
         self,
@@ -240,12 +236,15 @@ class ItineraryRepository:
             for index, remaining_step in enumerate(remaining_steps, start=1):
                 remaining_step.step_order = index
 
-            await db.commit()
+            await self._commit_or_rollback(db)
         except Exception:
             await db.rollback()
             raise
 
-        return await self.get_itinerary_by_id(db, itinerary_id, tourist_id)
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
 
     async def reorder_steps(
         self,
@@ -273,12 +272,178 @@ class ItineraryRepository:
             for index, step_id in enumerate(step_ids, start=1):
                 steps_by_id[step_id].step_order = index
 
-            await db.commit()
+            await self._commit_or_rollback(db)
         except Exception:
             await db.rollback()
             raise
 
-        return await self.get_itinerary_by_id(db, itinerary_id, tourist_id)
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
+
+    async def reschedule_step(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+        step_id: UUID,
+        payload: RescheduleStepRequest,
+    ) -> ItineraryResponse | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        target = next((s for s in itinerary.steps if s.id == step_id), None)
+        if target is None:
+            return None
+
+        new_arrival = to_chile_timezone(payload.arrival_time)
+
+        old_departure = to_chile_timezone(target.departure_time)
+
+        if payload.duration_minutes is not None:
+            new_departure = new_arrival + timedelta(minutes=payload.duration_minutes)
+        elif old_departure is not None:
+            duration = old_departure - (target.arrival_time if target.arrival_time else new_arrival)
+            new_departure = new_arrival + max(duration, timedelta(minutes=15))
+        else:
+            new_departure = new_arrival + timedelta(minutes=60)
+
+        target.arrival_time = new_arrival
+        target.departure_time = new_departure
+
+        target_day = new_arrival.date()
+        old_arrival = to_chile_timezone(target.arrival_time)
+
+        subsequent_on_day = sorted(
+            [
+                s for s in itinerary.steps
+                if s.id != target.id
+                and s.arrival_time is not None
+                and to_chile_timezone(s.arrival_time).date() == target_day
+            ],
+            key=lambda s: s.arrival_time,
+        )
+
+        if old_departure is not None:
+            old_departure_normalized = to_chile_timezone(old_departure)
+            shift_delta = new_departure - old_departure_normalized
+        else:
+            shift_delta = timedelta(0)
+
+        if shift_delta != timedelta(0):
+            for step in subsequent_on_day:
+                step_arrival = to_chile_timezone(step.arrival_time)
+                if step_arrival is not None:
+                    if step_arrival >= old_departure_normalized or shift_delta < timedelta(0):
+                        step.arrival_time = step_arrival + shift_delta
+                        if step.departure_time is not None:
+                            step.departure_time = to_chile_timezone(step.departure_time) + shift_delta
+
+        await self._commit_or_rollback(db)
+
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
+
+    async def reorder_steps_with_times(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+        payload: ReorderStepsWithTimesRequest,
+    ) -> ItineraryResponse | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        start_date = itinerary.start_date
+        current_step_ids = {step.id for step in itinerary.steps}
+        requested_step_ids = {step_position.step_id for step_position in payload.steps}
+        if current_step_ids != requested_step_ids or len(payload.steps) != len(current_step_ids):
+            raise ValueError("steps must contain every itinerary step exactly once.")
+
+        steps_by_id = {step.id: step for step in itinerary.steps}
+
+        day_groups: dict[int, list[StepDayPosition]] = {}
+        for sp in payload.steps:
+            day_groups.setdefault(sp.day_index, []).append(sp)
+        for day_index in day_groups:
+            day_groups[day_index].sort(key=lambda sp: sp.position)
+
+        DEFAULT_START_HOUR = 9
+        DEFAULT_START_MINUTE = 0
+        GAP_MINUTES = 15
+
+        try:
+            for day_index, positions in day_groups.items():
+                if start_date is not None:
+                    target_date = start_date + timedelta(days=day_index - 1)
+                elif itinerary.steps and itinerary.steps[0].arrival_time is not None:
+                    first_arrival = to_chile_timezone(itinerary.steps[0].arrival_time)
+                    target_date = first_arrival.date() + timedelta(days=day_index - 1)
+                else:
+                    target_date = None
+
+                cursor_minutes = DEFAULT_START_HOUR * 60 + DEFAULT_START_MINUTE
+
+                for sp in positions:
+                    step = steps_by_id[sp.step_id]
+
+                    old_arrival = step.arrival_time
+                    old_departure = step.departure_time
+                    duration: timedelta = timedelta(hours=1)
+
+                    if old_arrival is not None and old_departure is not None:
+                        a = to_chile_timezone(old_arrival)
+                        d = to_chile_timezone(old_departure)
+                        computed_duration = d - a
+                        if computed_duration >= timedelta(minutes=5):
+                            duration = computed_duration
+
+                    if target_date is not None:
+                        new_arrival = datetime(
+                            target_date.year, target_date.month, target_date.day,
+                            cursor_minutes // 60, cursor_minutes % 60, 0,
+                            tzinfo=CHILE_TZ,
+                        )
+                    elif old_arrival is not None:
+                        a = to_chile_timezone(old_arrival)
+                        new_arrival = a.replace(
+                            hour=cursor_minutes // 60,
+                            minute=cursor_minutes % 60,
+                            second=0,
+                            microsecond=0,
+                        )
+                    else:
+                        new_arrival = None
+
+                    new_departure = new_arrival + duration if new_arrival is not None else None
+
+                    step.arrival_time = new_arrival
+                    step.departure_time = new_departure
+
+                    if new_departure is not None:
+                        cursor_minutes = (new_departure.hour * 60 + new_departure.minute) + GAP_MINUTES
+
+            for index, sp in enumerate(payload.steps, start=1):
+                steps_by_id[sp.step_id].step_order = -index
+            await db.flush()
+
+            for index, sp in enumerate(payload.steps, start=1):
+                steps_by_id[sp.step_id].step_order = index
+
+            await self._commit_or_rollback(db)
+        except Exception:
+            await db.rollback()
+            raise
+
+        await db.refresh(itinerary, ["steps"])
+        for step in itinerary.steps:
+            await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
 
     def _to_response(self, itinerary: Itinerary) -> ItineraryResponse:
         start_date = itinerary.start_date
@@ -296,8 +461,8 @@ class ItineraryRepository:
         )
 
     def _step_to_response(self, step: ItineraryStep, start_date: date | None) -> ItineraryStepResponse:
-        arrival_time = self._to_chile_time(step.arrival_time)
-        departure_time = self._to_chile_time(step.departure_time)
+        arrival_time = to_chile_timezone(step.arrival_time)
+        departure_time = to_chile_timezone(step.departure_time)
         day_date = arrival_time.date() if arrival_time is not None else None
         day_index = None
         day_label = None
@@ -311,8 +476,8 @@ class ItineraryRepository:
             id=step.id,
             itinerary_id=step.itinerary_id,
             poi_id=step.poi_id,
-            poi_nombre=step.poi.name if step.poi is not None else None,
-            poi_descripcion=step.poi.description if step.poi is not None else None,
+            poi_name=step.poi.name if step.poi is not None else None,
+            poi_description=step.poi.description if step.poi is not None else None,
             step_order=step.step_order,
             arrival_time=arrival_time,
             departure_time=departure_time,
@@ -321,13 +486,6 @@ class ItineraryRepository:
             day_label=day_label,
             ai_context=step.ai_context,
         )
-
-    def _to_chile_time(self, value: datetime | None) -> datetime | None:
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            return value.replace(tzinfo=CHILE_TZ)
-        return value.astimezone(CHILE_TZ)
 
     async def _get_itinerary_model(
         self,
@@ -343,8 +501,3 @@ class ItineraryRepository:
         )
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
-
-    async def _get_category_ids(self, db: AsyncSession, poi_id: UUID) -> list[int]:
-        stmt = select(POICategory.category_id).where(POICategory.poi_id == poi_id)
-        result = await db.execute(stmt)
-        return list(result.scalars().all())

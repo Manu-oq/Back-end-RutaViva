@@ -4,18 +4,19 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.ara_message import AraMessage
 from app.models.ara_session import AraSession
+from app.repositories.base import BaseRepository
 from app.schemas.ara import AraMessageResponse, AraQuickReply
 
 _UNSET = object()
 
 
-class AraRepository:
+class AraRepository(BaseRepository):
     async def create_session(
         self,
         db: AsyncSession,
@@ -34,15 +35,14 @@ class AraRepository:
             tourist_id=tourist_id,
             status="clarifying",
             initial_query=initial_query,
-            lat=lat,
-            lon=lon,
             radius=radius,
             start_date=start_date,
             end_date=end_date,
             intent_data=intent_data,
             preferences_data=preferences_data,
-            candidate_poi_ids=[str(poi_id) for poi_id in candidate_poi_ids],
+            candidate_poi_ids=candidate_poi_ids,
         )
+        session.set_coordinates(lat, lon)
         db.add(session)
         await db.flush()
         return session
@@ -54,13 +54,23 @@ class AraRepository:
         tourist_id: UUID,
     ) -> AraSession | None:
         stmt = (
-            select(AraSession)
+            select(
+                AraSession,
+                func.ST_Y(AraSession.location).label("lat"),
+                func.ST_X(AraSession.location).label("lon"),
+            )
             .options(selectinload(AraSession.messages))
             .where(AraSession.id == session_id)
             .where(AraSession.tourist_id == tourist_id)
         )
         result = await db.execute(stmt)
-        return result.scalar_one_or_none()
+        row = result.one_or_none()
+        if row is None:
+            return None
+        session, lat, lon = row
+        session._lat = float(lat) if lat is not None else None
+        session._lon = float(lon) if lon is not None else None
+        return session
 
     async def add_message(
         self,
@@ -100,18 +110,11 @@ class AraRepository:
         if preferences_data is not None:
             session.preferences_data = preferences_data
         if candidate_poi_ids is not None:
-            session.candidate_poi_ids = [str(poi_id) for poi_id in candidate_poi_ids]
+            session.candidate_poi_ids = candidate_poi_ids
         if generated_itinerary_id is not _UNSET:
             session.generated_itinerary_id = generated_itinerary_id
         await db.flush()
         return session
-
-    async def commit_or_rollback(self, db: AsyncSession) -> None:
-        try:
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
 
     def to_message_response(self, message: AraMessage) -> AraMessageResponse:
         quick_replies = [AraQuickReply.model_validate(reply) for reply in (message.quick_replies or [])]

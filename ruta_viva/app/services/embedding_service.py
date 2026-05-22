@@ -21,6 +21,27 @@ class OpenAIEmbeddingService:
         )
         return response.data[0].embedding
 
+    async def get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        response = await self.client.embeddings.create(
+            model=self.model,
+            input=texts,
+            encoding_format="float",
+        )
+        return [item.embedding for item in sorted(response.data, key=lambda d: d.index)]
+
+
+class EmbeddingCache:
+    def __init__(self, service: OpenAIEmbeddingService) -> None:
+        self._service = service
+        self._cache: dict[str, list[float]] = {}
+
+    async def get_embedding(self, text: str) -> list[float]:
+        if text not in self._cache:
+            self._cache[text] = await self._service.get_embedding(text)
+        return self._cache[text]
+
 
 _embedding_service: OpenAIEmbeddingService | None = None
 

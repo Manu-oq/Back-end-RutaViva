@@ -215,13 +215,13 @@ Devuelve únicamente JSON válido:
     def _compact_poi(self, poi: POIResponse) -> dict[str, Any]:
         return {
             "id": str(poi.id),
-            "name": poi.nombre,
-            "description": poi.descripcion,
+            "name": poi.name,
+            "description": poi.description,
             "category_ids": poi.category_ids,
             "opening_hours_text": poi.opening_hours_text,
             "visit_rules": poi.visit_rules,
             "multimedia_urls": poi.multimedia_urls,
-            "distance_meters": poi.distancia_metros,
+            "distance_meters": poi.distance_meters,
         }
 
     def _compact_itinerary(self, itinerary: ItineraryResponse | None) -> list[dict[str, Any]]:
@@ -233,8 +233,8 @@ Devuelve únicamente JSON válido:
                 "day_index": step.day_index,
                 "day_label": step.day_label,
                 "poi_id": str(step.poi_id),
-                "poi_name": step.poi_nombre,
-                "poi_description": step.poi_descripcion,
+                "poi_name": step.poi_name,
+                "poi_description": step.poi_description,
                 "arrival_time": step.arrival_time.isoformat() if step.arrival_time else None,
                 "departure_time": step.departure_time.isoformat() if step.departure_time else None,
                 "ai_context": step.ai_context,
@@ -245,10 +245,10 @@ Devuelve únicamente JSON válido:
     def _place_hint(self, candidate_pois: list[POIResponse], active_itinerary: ItineraryResponse | None) -> str:
         if active_itinerary is not None and active_itinerary.steps:
             first_step = active_itinerary.steps[0]
-            if first_step.poi_nombre:
-                return f"En tu itinerario aparece {first_step.poi_nombre} como referencia."
+            if first_step.poi_name:
+                return f"En tu itinerario aparece {first_step.poi_name} como referencia."
         if candidate_pois:
-            names = ", ".join(poi.nombre for poi in candidate_pois[:2])
+            names = ", ".join(poi.name for poi in candidate_pois[:2])
             return f"En la zona aparecen referencias como {names}."
         return ""
 

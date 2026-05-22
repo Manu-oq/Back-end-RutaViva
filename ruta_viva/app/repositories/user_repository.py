@@ -4,17 +4,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.rut import format_rut, validate_rut
 from app.core.security import get_password_hash
 from app.models.entrepreneur_profile import EntrepreneurProfile
 from app.models.tourist_profile import TouristProfile
 from app.models.user import User
+from app.repositories.base import BaseRepository
 from app.schemas.entrepreneur_profile import EntrepreneurProfileCreate
 from app.schemas.tourist_profile import TouristProfileCreate
 from app.schemas.tourist_profile import TouristProfileUpdate
 from app.schemas.user import UserCreate, UserUpdate
 
 
-class UserRepository:
+class UserRepository(BaseRepository):
     async def get_user_by_id(self, db: AsyncSession, user_id: UUID) -> User | None:
         result = await db.execute(
             select(User)
@@ -62,12 +64,8 @@ class UserRepository:
                 admin_data["display_name"] = user_in.display_name
                 entrepreneur_profile.admin_data = admin_data
 
-        try:
-            await db.commit()
-            return await self.get_user_by_id(db, user_id)
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)
+        return await self.get_user_by_id(db, user_id)
 
     async def create_tourist_user(
         self,
@@ -95,7 +93,7 @@ class UserRepository:
             )
             db.add(tourist_profile)
 
-            await db.commit()
+            await self._commit_or_rollback(db)
             created_user = await self.get_user_by_id(db, user.id)
             return created_user or user
         except Exception:
@@ -119,12 +117,8 @@ class UserRepository:
         if profile_in.system_preferences is not None:
             tourist_profile.system_preferences = profile_in.system_preferences
 
-        try:
-            await db.commit()
-            await db.refresh(tourist_profile)
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)
+        await db.refresh(tourist_profile)
 
         return tourist_profile
 
@@ -138,22 +132,20 @@ class UserRepository:
         if entrepreneur_profile is not None:
             if profile_in.admin_data is not None:
                 entrepreneur_profile.admin_data = profile_in.admin_data
-                await db.commit()
+                await self._commit_or_rollback(db)
                 await db.refresh(entrepreneur_profile)
             return entrepreneur_profile
 
         entrepreneur_profile = EntrepreneurProfile(
             user_id=user_id,
+            rut=format_rut(profile_in.rut) if profile_in.rut else None,
+            verification_status="verified" if profile_in.rut and validate_rut(profile_in.rut) else "unverified",
             admin_data=profile_in.admin_data,
         )
         db.add(entrepreneur_profile)
 
-        try:
-            await db.commit()
-            await db.refresh(entrepreneur_profile)
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)
+        await db.refresh(entrepreneur_profile)
 
         return entrepreneur_profile
 
@@ -163,8 +155,4 @@ class UserRepository:
             return
 
         tourist_profile.interests_embedding = None
-        try:
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)

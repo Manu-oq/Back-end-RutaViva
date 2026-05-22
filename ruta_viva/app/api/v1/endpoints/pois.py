@@ -1,15 +1,17 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_optional_current_user
 from app.db.session import get_db
+from app.models.poi import POI
 from app.models.user import User
 from app.repositories.entrepreneur_repository import EntrepreneurRepository
 from app.repositories.poi_repository import POIRepository
-from app.schemas.entrepreneur import POIVisitCreate, POIVisitResponse
-from app.schemas.poi import POICreate, POIMediaAppend, POIResponse, POIUpdate
+from app.schemas.entrepreneur import POIVisitCreate, POIVisitResponse, PublicEntrepreneurPostResponse
+from app.schemas.poi import POICreationCheck, POICreate, POIMediaAppend, POIResponse, POIUpdate
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 
 
@@ -64,23 +66,128 @@ def _parse_category_ids(category_ids: list[str] | None) -> list[int] | None:
     return parsed_ids or None
 
 
-@router.post("/", response_model=POIResponse, status_code=status.HTTP_201_CREATED)
+POI_DAILY_LIMIT = 10
+POI_HOURLY_LIMIT = 5
+
+
+def _calculate_confidence_score(
+    has_image: bool,
+    description_length: int,
+    has_category: bool,
+    has_opening_hours: bool,
+    has_contact: bool,
+    is_verified_entrepreneur: bool,
+) -> float:
+    score = 0.0
+    if has_image:
+        score += 0.2
+    if description_length >= 50:
+        score += 0.15
+    elif description_length >= 20:
+        score += 0.05
+    if has_category:
+        score += 0.1
+    if has_opening_hours:
+        score += 0.1
+    if has_contact:
+        score += 0.05
+    if is_verified_entrepreneur:
+        score += 0.2
+    return min(round(score, 2), 1.0)
+
+
+@router.post("/", response_model=POIResponse | POICreationCheck, status_code=status.HTTP_201_CREATED)
 async def create_poi(
     payload: POICreate,
+    force_create: bool = Query(default=False, description="Set to true to create even if duplicates are detected."),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
-) -> POIResponse:
-    entrepreneur_id = (
-        current_user.id if getattr(current_user, "entrepreneur_profile", None) is not None else None
+) -> POIResponse | POICreationCheck:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    hour_ago = now - timedelta(hours=1)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    hourly_count = await db.scalar(
+        select(func.count()).select_from(POI).where(
+            POI.entrepreneur_id == current_user.id,
+            POI.created_at >= hour_ago,
+        )
     )
-    text = f"{payload.nombre}. {payload.descripcion}"
+    if (hourly_count or 0) >= POI_HOURLY_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit: maximum {POI_HOURLY_LIMIT} POIs per hour.",
+        )
+
+    daily_count = await db.scalar(
+        select(func.count()).select_from(POI).where(
+            POI.entrepreneur_id == current_user.id,
+            POI.created_at >= today_start,
+        )
+    )
+    if (daily_count or 0) >= POI_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit: maximum {POI_DAILY_LIMIT} POIs per day.",
+        )
+
+    text = f"{payload.name}. {payload.description}"
     embedding = await embedding_service.get_embedding(text)
+
+    duplicates = await poi_repository.find_potential_duplicates(
+        db,
+        lat=payload.latitude,
+        lon=payload.longitude,
+        query_embedding=embedding,
+        category_ids=payload.category_ids,
+    )
+
+    if duplicates and not force_create:
+        pending = {
+            "name": payload.name,
+            "description": payload.description,
+            "access_type": payload.access_type,
+            "latitude": payload.latitude,
+            "longitude": payload.longitude,
+            "category_ids": payload.category_ids,
+            "image_url": payload.image_url,
+            "contact_phone": payload.contact_phone,
+            "contact_email": payload.contact_email,
+            "opening_hours_text": payload.opening_hours_text,
+            "visit_rules": payload.visit_rules,
+        }
+        return POICreationCheck(
+            potential_duplicates=duplicates,
+            pending_creation=pending,
+        )
+
+    entrepreneur_id = current_user.id if current_user.entrepreneur_profile is not None else None
+    is_verified = (
+        current_user.entrepreneur_profile is not None
+        and current_user.entrepreneur_profile.verification_status == "verified"
+    )
+
+    confidence = _calculate_confidence_score(
+        has_image=bool(payload.image_url),
+        description_length=len(payload.description),
+        has_category=len(payload.category_ids) > 0,
+        has_opening_hours=bool(payload.opening_hours_text),
+        has_contact=bool(payload.contact_phone or payload.contact_email),
+        is_verified_entrepreneur=is_verified,
+    )
+
+    verification_status = "verified" if is_verified else "pending"
+
     return await poi_repository.create_poi(
         db,
         payload,
         entrepreneur_id=entrepreneur_id,
         embedding=embedding,
+        verification_status=verification_status,
+        confidence_score=confidence,
     )
 
 
@@ -166,6 +273,24 @@ async def get_poi_detail(
     return poi
 
 
+@router.get("/{poi_id}/posts", response_model=list[PublicEntrepreneurPostResponse])
+async def list_public_poi_posts(
+    poi_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[PublicEntrepreneurPostResponse]:
+    from app.models.poi import POI as POIModel
+
+    poi_exists = await db.get(POIModel, poi_id)
+    if poi_exists is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="POI not found.",
+        )
+
+    posts = await entrepreneur_repository.list_published_poi_posts(db, poi_id)
+    return [PublicEntrepreneurPostResponse.model_validate(post) for post in posts]
+
+
 @router.post("/{poi_id}/visit", response_model=POIVisitResponse, status_code=status.HTTP_201_CREATED)
 async def record_poi_visit(
     poi_id: UUID,
@@ -181,6 +306,9 @@ async def record_poi_visit(
     )
     if visit is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="POI not found.")
+
+    await poi_repository.recalculate_confidence(db, poi_id)
+
     return visit
 
 
@@ -218,7 +346,9 @@ async def append_poi_media(
             detail="POI not found.",
         )
 
-    return updated
+    await poi_repository.recalculate_confidence(db, poi_id)
+
+    return await poi_repository.get_poi_by_id(db, poi_id)
 
 
 @router.put("/{poi_id}", response_model=POIResponse)
@@ -245,9 +375,9 @@ async def update_poi(
         )
 
     embedding = None
-    if payload.nombre is not None or payload.descripcion is not None:
-        next_name = payload.nombre or current_poi.name
-        next_description = payload.descripcion or current_poi.description
+    if payload.name is not None or payload.description is not None:
+        next_name = payload.name or current_poi.name
+        next_description = payload.description or current_poi.description
         embedding = await embedding_service.get_embedding(f"{next_name}. {next_description}")
 
     updated = await poi_repository.update_poi(
@@ -262,7 +392,9 @@ async def update_poi(
             detail="POI not found.",
         )
 
-    return updated
+    await poi_repository.recalculate_confidence(db, poi_id)
+
+    return await poi_repository.get_poi_by_id(db, poi_id)
 
 
 @router.delete("/{poi_id}", status_code=status.HTTP_204_NO_CONTENT)

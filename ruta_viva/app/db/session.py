@@ -29,7 +29,7 @@ BASE_CATEGORIES = [
 
 engine = create_async_engine(
     settings.async_database_uri,
-    echo=False,
+    echo=settings.database_echo,
     pool_pre_ping=True,
 )
 

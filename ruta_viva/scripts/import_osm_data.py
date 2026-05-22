@@ -22,8 +22,7 @@ from app.db.session import AsyncSessionLocal, init_db
 from app.models.category import Category
 from app.models.poi import POI
 from app.models.poi_category import POICategory
-from app.repositories.poi_repository import POIRepository, from_text
-from app.schemas.poi import POICreate
+from app.repositories.poi_repository import from_text
 from app.services.embedding_service import get_embedding_service
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -206,7 +205,6 @@ DEFAULT_CATEGORIES = {
 }
 
 logger = logging.getLogger("osm_import")
-poi_repository = POIRepository()
 embedding_service = None
 
 
@@ -468,10 +466,10 @@ def get_lat_lon(element: dict[str, Any]) -> tuple[float | None, float | None]:
 def infer_access_type(tags: dict[str, str]) -> str:
     access = clean_text(tags.get("access"))
     if access in {"private", "no"}:
-        return "privado"
+        return "private"
     if access in {"customers", "permissive", "destination"}:
-        return "restringido"
-    return "publico"
+        return "restricted"
+    return "public"
 
 
 def infer_category_names(tags: dict[str, str]) -> list[str]:
@@ -801,10 +799,23 @@ def build_description(name: str, tags: dict[str, str]) -> str:
     place_type = describe_place_type(tags)
     locality = clean_text(tags.get("addr:city") or tags.get("addr:town") or tags.get("addr:state"))
     opening_hours = clean_text(tags.get("opening_hours"))
+    cuisine = clean_text(tags.get("cuisine"))
+    operator = clean_text(tags.get("operator"))
+    tag_summary = [
+        f"{key}={value}"
+        for key in ("tourism", "amenity", "natural", "leisure", "historic", "shop", "route")
+        if (value := clean_text(tags.get(key)))
+    ]
 
     base = f"{name} es un {place_type} ubicado en la Región de La Araucanía, Chile."
     if locality:
-        base += f" Referencia territorial reportada por OSM: {locality}."
+        base += f" Se ubica o referencia en el sector de {locality}."
+    if cuisine:
+        base += f" La información OSM indica cocina o especialidad: {cuisine.replace(';', ', ')}."
+    if operator:
+        base += f" Operador informado: {operator}."
+    if tag_summary:
+        base += f" Clasificación OSM relevante: {', '.join(tag_summary[:4])}."
     if opening_hours:
         base += f" Horario informado en OSM: {opening_hours}."
     return base
@@ -828,6 +839,8 @@ def build_multimedia_payload(element: dict[str, Any], tags: dict[str, str]) -> d
         payload["website"] = website
     if image:
         payload["image"] = image
+        payload["cover"] = image
+        payload["gallery"] = [image]
     if wikipedia:
         payload["wikipedia"] = wikipedia
 
@@ -938,6 +951,35 @@ def merge_multimedia_payload(existing_media: object, new_media: dict[str, Any] |
     return new_media
 
 
+def calculate_osm_confidence_score(place: OSMPlace, category_ids: list[int]) -> float:
+    """Score OSM POI quality using the same 0.0-1.0 confidence scale as user-created POIs."""
+    media = place.multimedia_urls or {}
+    score = 0.55
+
+    if category_ids:
+        score += 0.1
+    if len(place.description or "") >= 120:
+        score += 0.15
+    elif len(place.description or "") >= 60:
+        score += 0.1
+    elif len(place.description or "") >= 30:
+        score += 0.05
+    if place.opening_hours_text:
+        score += 0.1
+    if place.phone or place.email:
+        score += 0.05
+    if media.get("website") or media.get("wikipedia"):
+        score += 0.1
+    if media.get("image") or media.get("cover") or media.get("gallery"):
+        score += 0.05
+
+    visit_rules = place.visit_rules or {}
+    if visit_rules.get("blocked_for_itinerary"):
+        score -= 0.15
+
+    return min(max(round(score, 2), 0.0), 1.0)
+
+
 def should_refresh_description(existing_description: str | None, place: OSMPlace, refresh_embeddings: bool) -> bool:
     if refresh_embeddings:
         return True
@@ -968,10 +1010,42 @@ async def update_existing_osm_poi(
     poi.multimedia_urls = merge_multimedia_payload(poi.multimedia_urls, place.multimedia_urls)
     poi.opening_hours_text = place.opening_hours_text
     poi.visit_rules = place.visit_rules
+    poi.verification_status = "verified"
+    poi.confidence_score = calculate_osm_confidence_score(place, category_ids)
 
     await db.execute(delete(POICategory).where(POICategory.poi_id == poi.id))
     for category_id in category_ids:
         db.add(POICategory(poi_id=poi.id, category_id=category_id))
+
+
+async def create_osm_poi(
+    db,
+    place: OSMPlace,
+    category_ids: list[int],
+    embedding: list[float],
+) -> POI:
+    poi = POI(
+        entrepreneur_id=None,
+        name=place.name,
+        description=place.description,
+        description_embedding=embedding,
+        location=from_text(f"POINT({place.longitude} {place.latitude})", srid=4326),
+        access_type=place.access_type,
+        contact_phone=place.phone,
+        contact_email=place.email,
+        multimedia_urls=place.multimedia_urls,
+        opening_hours_text=place.opening_hours_text,
+        visit_rules=place.visit_rules,
+        verification_status="verified",
+        confidence_score=calculate_osm_confidence_score(place, category_ids),
+    )
+    db.add(poi)
+    await db.flush()
+
+    for category_id in category_ids:
+        db.add(POICategory(poi_id=poi.id, category_id=category_id))
+
+    return poi
 
 
 def format_duration(seconds: float) -> str:
@@ -1056,27 +1130,14 @@ async def import_place(
 
         embedding = await embedding_service.get_embedding(place.description)
 
-        poi_in = POICreate(
-            nombre=place.name,
-            descripcion=place.description,
-            tipo_acceso=place.access_type,
-            telefono_publico=place.phone,
-            email_publico=place.email,
-            multimedia_urls=place.multimedia_urls,
-            opening_hours_text=place.opening_hours_text,
-            visit_rules=place.visit_rules,
-            category_ids=category_ids,
-            latitude=place.latitude,
-            longitude=place.longitude,
-        )
-
         async with AsyncSessionLocal() as db:
-            await poi_repository.create_poi(
+            await create_osm_poi(
                 db,
-                poi_in=poi_in,
+                place=place,
+                category_ids=category_ids,
                 embedding=embedding,
-                entrepreneur_id=None,
             )
+            await db.commit()
 
         return ImportStatus.CREATED
     except Exception as exc:  # noqa: BLE001

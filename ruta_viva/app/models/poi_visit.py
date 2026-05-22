@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 class POIVisit(Base):
     __tablename__ = "poi_visits"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('frontend', 'itinerary', 'external')",
+            name="ck_poi_visits_source",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     poi_id: Mapped[UUID] = mapped_column(

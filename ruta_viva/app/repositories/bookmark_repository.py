@@ -2,40 +2,46 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bookmark import Bookmark
 from app.models.poi import POI
+from app.models.poi_category import POICategory
 from app.models.tourist_profile import TouristProfile
-from app.repositories.poi_repository import POIRepository
+from app.repositories.base import BaseRepository
+from app.repositories.utils import build_poi_response_from_row, get_category_ids_batch
 from app.schemas.bookmark import BookmarkResponse
 from app.schemas.poi import POIResponse
 
 
-class BookmarkRepository:
-    def __init__(self) -> None:
-        self._poi_repository = POIRepository()
-
+class BookmarkRepository(BaseRepository):
     async def list_bookmarked_pois(
         self,
         db: AsyncSession,
         tourist_id: UUID,
     ) -> list[POIResponse]:
         stmt = (
-            select(Bookmark.poi_id)
+            select(
+                POI,
+                func.ST_Y(POI.location).label("latitude"),
+                func.ST_X(POI.location).label("longitude"),
+                Bookmark.created_at.label("bookmarked_at"),
+            )
+            .join(Bookmark, Bookmark.poi_id == POI.id)
             .where(Bookmark.tourist_id == tourist_id)
             .order_by(Bookmark.created_at.desc())
         )
         result = await db.execute(stmt)
-        poi_ids = list(result.scalars().all())
+        rows = result.all()
+        if not rows:
+            return []
 
-        pois: list[POIResponse] = []
-        for poi_id in poi_ids:
-            poi = await self._poi_repository.get_poi_by_id(db, poi_id)
-            if poi is not None:
-                pois.append(poi)
-        return pois
+        category_map = await get_category_ids_batch(db, [poi.id for poi, _, _, _ in rows])
+        return [
+            build_poi_response_from_row(poi, latitude, longitude, category_map.get(poi.id, []))
+            for poi, latitude, longitude, _bookmarked_at in rows
+        ]
 
     async def is_bookmarked(
         self,
@@ -76,12 +82,8 @@ class BookmarkRepository:
         bookmark = Bookmark(tourist_id=tourist_id, poi_id=poi_id)
         db.add(bookmark)
 
-        try:
-            await db.commit()
-            await db.refresh(bookmark)
-        except Exception:
-            await db.rollback()
-            raise
+        await self._commit_or_rollback(db)
+        await db.refresh(bookmark)
 
         return BookmarkResponse.model_validate(bookmark)
 
@@ -91,10 +93,14 @@ class BookmarkRepository:
         tourist_id: UUID,
         poi_id: UUID,
     ) -> bool:
-        stmt = delete(Bookmark).where(
-            Bookmark.tourist_id == tourist_id,
-            Bookmark.poi_id == poi_id,
-        )
-        result = await db.execute(stmt)
-        await db.commit()
+        try:
+            stmt = delete(Bookmark).where(
+                Bookmark.tourist_id == tourist_id,
+                Bookmark.poi_id == poi_id,
+            )
+            result = await db.execute(stmt)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         return (result.rowcount or 0) > 0

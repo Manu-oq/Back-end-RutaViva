@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,7 +17,17 @@ if TYPE_CHECKING:
 
 class ItineraryStep(Base):
     __tablename__ = "itinerary_steps"
-    __table_args__ = (UniqueConstraint("itinerary_id", "step_order", name="uq_itinerary_steps_order"),)
+    __table_args__ = (
+        UniqueConstraint("itinerary_id", "step_order", name="uq_itinerary_steps_order"),
+        CheckConstraint(
+            "step_order > 0",
+            name="ck_itinerary_steps_step_order",
+        ),
+        CheckConstraint(
+            "departure_time IS NULL OR arrival_time IS NULL OR departure_time > arrival_time",
+            name="ck_itinerary_steps_time_order",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     itinerary_id: Mapped[UUID] = mapped_column(

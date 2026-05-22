@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.repositories.poi_repository import POIRepository
 from app.repositories.review_repository import ReviewRepository
 from app.schemas.review import (
     ReviewCreate,
@@ -14,10 +15,12 @@ from app.schemas.review import (
     ReviewUpdate,
 )
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
+from app.services.review_enrichment_service import generate_review_embedding_and_update_profile
 
 
 router = APIRouter(tags=["reviews"])
 review_repository = ReviewRepository()
+poi_repository = POIRepository()
 
 
 @router.post("/", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
@@ -47,10 +50,12 @@ async def create_review(
         ) from exc
 
     background_tasks.add_task(
-        review_repository.generate_review_embedding_and_update_profile,
+        generate_review_embedding_and_update_profile,
         review.id,
         embedding_service,
     )
+
+    await poi_repository.recalculate_confidence(db, payload.poi_id)
 
     return review
 
@@ -118,7 +123,7 @@ async def update_review(
 
     if payload.text_content is not None:
         background_tasks.add_task(
-            review_repository.generate_review_embedding_and_update_profile,
+            generate_review_embedding_and_update_profile,
             review.id,
             embedding_service,
         )

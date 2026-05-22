@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GenerateItineraryRequest(BaseModel):
-    query: str
+    query: str = Field(max_length=500)
     lat: float
     lon: float
     radius: float = Field(default=5000, gt=0)
@@ -45,8 +45,8 @@ class ItineraryStepResponse(BaseModel):
     id: UUID
     itinerary_id: UUID
     poi_id: UUID
-    poi_nombre: str | None = None
-    poi_descripcion: str | None = None
+    poi_name: str | None = None
+    poi_description: str | None = None
     step_order: int
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
@@ -65,6 +65,21 @@ class ItineraryStepUpdate(BaseModel):
     ai_context: dict[str, Any] | None = None
 
 
+class RescheduleStepRequest(BaseModel):
+    arrival_time: datetime
+    duration_minutes: int | None = None
+
+
+class StepDayPosition(BaseModel):
+    step_id: UUID
+    day_index: int = Field(gt=0)
+    position: int = Field(ge=0)
+
+
+class ReorderStepsWithTimesRequest(BaseModel):
+    steps: list[StepDayPosition] = Field(min_length=1)
+
+
 class ReorderItineraryStepsRequest(BaseModel):
     step_ids: list[UUID] = Field(min_length=1)
 
@@ -79,3 +94,17 @@ class ItineraryResponse(BaseModel):
     steps: list[ItineraryStepResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ItineraryStepWeather(BaseModel):
+    description: str
+    temperature_c: int
+    precipitation_probability: int
+
+
+class ItineraryStepWeatherResponse(BaseModel):
+    step_id: UUID
+    poi_id: UUID
+    poi_name: str | None = None
+    day_date: date | None = None
+    weather: ItineraryStepWeather | None = None

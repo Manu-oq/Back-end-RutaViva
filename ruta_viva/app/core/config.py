@@ -27,6 +27,10 @@ class Settings(BaseSettings):
         default=5432,
         validation_alias=AliasChoices("POSTGRES_PORT", "postgres_port"),
     )
+    database_echo: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("DATABASE_ECHO", "database_echo"),
+    )
 
     openai_api_key: str | None = None
     deepseek_api_key: str | None = None
@@ -37,7 +41,8 @@ class Settings(BaseSettings):
 
     secret_key: str
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7
+    access_token_expire_minutes: int = 60
+    refresh_token_expire_minutes: int = 60 * 24 * 7
 
     model_config = SettingsConfigDict(
         env_file=".env",
