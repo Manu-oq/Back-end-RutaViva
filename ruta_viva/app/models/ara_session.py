@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from geoalchemy2 import Geometry
 from geoalchemy2.elements import WKTElement
-from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, String, func
+from sqlalchemy import CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,9 +29,11 @@ class AraSession(Base):
             "radius IS NULL OR radius > 0",
             name="ck_ara_sessions_radius",
         ),
+        CheckConstraint("version > 0", name="ck_ara_sessions_version"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     tourist_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("tourist_profiles.user_id", ondelete="CASCADE"),

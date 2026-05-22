@@ -7,6 +7,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.core.llm_retry import with_retry
 from app.schemas.ara import AraQuickReply
 from app.schemas.itinerary import ItineraryResponse
 from app.schemas.poi import POIResponse
@@ -37,27 +38,32 @@ class AraChatService:
             return fallback
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                temperature=0.2,
-                response_format={"type": "json_object"},
-                timeout=settings.ara_chat_timeout_seconds,
-                messages=[
-                    {"role": "system", "content": self._system_prompt()},
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "user_message": user_message,
-                                "topic": topic,
-                                "preferences": preferences,
-                                "candidate_pois": [self._compact_poi(poi) for poi in candidate_pois[:8]],
-                                "active_itinerary_steps": self._compact_itinerary(active_itinerary),
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                ],
+            response = await with_retry(
+                operation=lambda: self.client.chat.completions.create(
+                    model=self.model,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                    timeout=settings.ara_chat_timeout_seconds,
+                    messages=[
+                        {"role": "system", "content": self._system_prompt()},
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "user_message": user_message,
+                                    "topic": topic,
+                                    "preferences": preferences,
+                                    "candidate_pois": [self._compact_poi(poi) for poi in candidate_pois[:8]],
+                                    "active_itinerary_steps": self._compact_itinerary(active_itinerary),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                ),
+                max_retries=2,
+                base_delay=1.0,
+                operation_name="ara_chat",
             )
             content = response.choices[0].message.content
             if not content:

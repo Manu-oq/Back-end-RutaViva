@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.core.llm_retry import with_retry
 from app.schemas.itinerary import GeneratedItinerary
 from app.schemas.poi import POIResponse
 
@@ -113,7 +114,12 @@ Reglas obligatorias:
 
         if stream_callback is not None:
             kwargs["stream"] = True
-            stream = await self.client.chat.completions.create(**kwargs)
+            stream = await with_retry(
+                lambda: self.client.chat.completions.create(**kwargs),
+                max_retries=1,
+                base_delay=2.0,
+                operation_name="itinerary_generation",
+            )
             content = ""
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
@@ -121,7 +127,12 @@ Reglas obligatorias:
                     content += token
                     await stream_callback(token)
         else:
-            response = await self.client.chat.completions.create(**kwargs)
+            response = await with_retry(
+                lambda: self.client.chat.completions.create(**kwargs),
+                max_retries=1,
+                base_delay=2.0,
+                operation_name="itinerary_generation",
+            )
             content = response.choices[0].message.content
 
         if not content:

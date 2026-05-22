@@ -29,3 +29,8 @@ class ValidationError(AppError):
 class ExternalServiceError(AppError):
     status_code = 502
     detail = "External service error."
+
+
+class ConcurrencyError(AppError):
+    status_code = 409
+    detail = "The resource was modified by another request. Please reload and try again."

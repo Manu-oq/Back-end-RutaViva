@@ -29,6 +29,7 @@ from app.core.ara_constants import (
     UUID_PATTERN,
 )
 from app.core.config import settings
+from app.core.llm_retry import with_retry
 from app.services.ara_message_normalizer import normalize_message
 
 logger = logging.getLogger(__name__)
@@ -125,12 +126,18 @@ async def classify_turn_llm(
         return None
 
     try:
-        response = await llm_client.chat.completions.create(
-            model="deepseek-chat",
-            temperature=0,
-            max_tokens=200,
-            timeout=5,
-            messages=_build_classification_messages(message, normalized, session_context),
+        response = await with_retry(
+            operation=lambda: llm_client.chat.completions.create(
+                model="deepseek-chat",
+                temperature=0,
+                max_tokens=200,
+                timeout=5,
+                messages=_build_classification_messages(message, normalized, session_context),
+            ),
+            max_retries=1,
+            base_delay=0.5,
+            max_delay=2.0,
+            operation_name="turn_classifier",
         )
         content = response.choices[0].message.content
         if not content:

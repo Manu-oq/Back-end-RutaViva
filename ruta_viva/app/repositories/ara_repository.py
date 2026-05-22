@@ -4,7 +4,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -97,12 +97,56 @@ class AraRepository(BaseRepository):
         db: AsyncSession,
         session: AraSession,
         *,
+        expected_version: int | None = None,
         status: str | None = None,
         intent_data: dict[str, Any] | None = None,
         preferences_data: dict[str, Any] | None = None,
         candidate_poi_ids: list[UUID] | None = None,
         generated_itinerary_id: UUID | None | object = _UNSET,
-    ) -> AraSession:
+    ) -> bool:
+        if expected_version is not None:
+            sets: list[str] = []
+            params: dict[str, Any] = {"id": session.id, "expected_version": expected_version}
+
+            if status is not None:
+                sets.append("status = :status")
+                params["status"] = status
+            if intent_data is not None:
+                sets.append("intent_data = :intent_data")
+                params["intent_data"] = intent_data
+            if preferences_data is not None:
+                sets.append("preferences_data = :preferences_data")
+                params["preferences_data"] = preferences_data
+            if candidate_poi_ids is not None:
+                sets.append("candidate_poi_ids = :candidate_poi_ids")
+                params["candidate_poi_ids"] = candidate_poi_ids
+            if generated_itinerary_id is not _UNSET:
+                sets.append("generated_itinerary_id = :generated_itinerary_id")
+                params["generated_itinerary_id"] = generated_itinerary_id
+
+            sets.append("version = version + 1")
+
+            sql = f"UPDATE ara_sessions SET {', '.join(sets)} WHERE id = :id AND version = :expected_version RETURNING version"
+            result = await db.execute(text(sql), params)
+            row = result.fetchone()
+            if row is None:
+                return False
+
+            new_version = row[0]
+            session.version = new_version
+            if status is not None:
+                session.status = status
+            if intent_data is not None:
+                session.intent_data = intent_data
+            if preferences_data is not None:
+                session.preferences_data = preferences_data
+            if candidate_poi_ids is not None:
+                session.candidate_poi_ids = candidate_poi_ids
+            if generated_itinerary_id is not _UNSET:
+                session.generated_itinerary_id = generated_itinerary_id
+
+            return True
+
         if status is not None:
             session.status = status
         if intent_data is not None:
@@ -114,7 +158,7 @@ class AraRepository(BaseRepository):
         if generated_itinerary_id is not _UNSET:
             session.generated_itinerary_id = generated_itinerary_id
         await db.flush()
-        return session
+        return True
 
     def to_message_response(self, message: AraMessage) -> AraMessageResponse:
         quick_replies = [AraQuickReply.model_validate(reply) for reply in (message.quick_replies or [])]

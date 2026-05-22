@@ -61,16 +61,39 @@ class AraGenerateItineraryRequest(BaseModel):
     final_instruction: str | None = Field(default=None, max_length=1000)
 
 
+class AraIntentInfo(BaseModel):
+    intents: list[str] = Field(default_factory=list)
+    primary_intent: str | None = None
+    specificity: str | None = None
+    locations: list[str] = Field(default_factory=list)
+    turn_count: int = 0
+
+
+class AraPreferenceSummary(BaseModel):
+    tags: list[str] = Field(default_factory=list)
+    positive_preferences: list[str] = Field(default_factory=list)
+    negative_constraints: list[str] = Field(default_factory=list)
+    completed_dimensions: list[str] = Field(default_factory=list)
+    trip_draft: dict[str, Any] | None = None
+    destination_scope: str | None = None
+    selected_poi_ids: list[str] = Field(default_factory=list)
+    conversation_mode: str | None = None
+    route_ready_score: float = 0.0
+
+
 class AraSessionResponse(BaseModel):
     session_id: UUID
     status: str
     user_message: AraMessageResponse | None = None
     assistant_message: AraMessageResponse | None = None
     quick_replies: list[AraQuickReply] = Field(default_factory=list)
-    intent: dict[str, Any] = Field(default_factory=dict)
-    preferences: dict[str, Any] = Field(default_factory=dict)
-    candidate_pois: list[dict[str, Any]] = Field(default_factory=list)
+    intent: AraIntentInfo | None = None
+    preferences: AraPreferenceSummary | None = None
+    candidate_pois: list[AraCandidatePOI] = Field(default_factory=list)
     generated_itinerary_id: UUID | None = None
+    active_itinerary_id: UUID | None = None
+    destination_context: dict[str, Any] | None = None
+    weather: dict[str, Any] | None = None
 
 
 class AraMessagesResponse(BaseModel):
