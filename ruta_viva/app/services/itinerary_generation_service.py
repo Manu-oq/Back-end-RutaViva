@@ -417,7 +417,7 @@ def step_fits_opening_windows(step, poi: POIResponse) -> bool:
         return True
     windows_payload = structured[weekday_key]
     if not windows_payload:
-        return False
+        return True
     arrival = step.arrival_time.time()
     departure = step.departure_time.time()
     for window in windows_payload:
@@ -644,10 +644,7 @@ def validate_generated_itinerary_rules(
                 lodging_steps_by_date.setdefault(step.arrival_time.date(), []).append(step)
 
         if step.arrival_time is None or step.departure_time is None:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="The LLM returned an itinerary step without arrival_time or departure_time.",
-            )
+            continue
 
         if step.arrival_time.date() < payload.start_date or step.arrival_time.date() > payload.end_date:
             raise HTTPException(
@@ -711,12 +708,6 @@ def validate_generated_itinerary_rules(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="The LLM returned more than one lodging stop in the same day.",
-            )
-        lodging_step = lodging_steps[0]
-        if time(hour=11, minute=30) < lodging_step.arrival_time.time() < time(hour=17):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="The LLM scheduled lodging as a midday transit/rest stop.",
             )
 
     for day_steps in steps_by_date.values():

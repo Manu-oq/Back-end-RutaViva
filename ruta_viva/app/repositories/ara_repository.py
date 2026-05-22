@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -112,14 +113,14 @@ class AraRepository(BaseRepository):
                 sets.append("status = :status")
                 params["status"] = status
             if intent_data is not None:
-                sets.append("intent_data = :intent_data")
-                params["intent_data"] = intent_data
+                sets.append("intent_data = :intent_data::jsonb")
+                params["intent_data"] = json.dumps(intent_data)
             if preferences_data is not None:
-                sets.append("preferences_data = :preferences_data")
-                params["preferences_data"] = preferences_data
+                sets.append("preferences_data = :preferences_data::jsonb")
+                params["preferences_data"] = json.dumps(preferences_data)
             if candidate_poi_ids is not None:
                 sets.append("candidate_poi_ids = :candidate_poi_ids")
-                params["candidate_poi_ids"] = candidate_poi_ids
+                params["candidate_poi_ids"] = [str(poi_id) for poi_id in candidate_poi_ids]
             if generated_itinerary_id is not _UNSET:
                 sets.append("generated_itinerary_id = :generated_itinerary_id")
                 params["generated_itinerary_id"] = generated_itinerary_id
