@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class POIBase(BaseModel):
     name: str
     description: str
-    access_type: str
+    access_type: Literal["public", "restricted", "private"]
     contact_phone: str | None = None
     contact_email: str | None = None
     multimedia_urls: dict[str, Any] | None = None
@@ -25,7 +25,7 @@ class POICreate(POIBase):
 class POIUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    access_type: str | None = None
+    access_type: Literal["public", "restricted", "private"] | None = None
     contact_phone: str | None = None
     contact_email: str | None = None
     opening_hours_text: str | None = None
