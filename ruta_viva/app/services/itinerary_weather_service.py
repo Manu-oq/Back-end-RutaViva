@@ -6,13 +6,19 @@ from uuid import UUID
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import func as sql_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.itinerary_constants import CHILE_TZ
-from app.models.poi import POI as POIModel
 from app.repositories.itinerary_repository import ItineraryRepository
 from app.schemas.itinerary import ItineraryStepWeather, ItineraryStepWeatherResponse
+
+
+async def _get_step_coordinates_batch(
+    db: AsyncSession,
+    itinerary_repo: ItineraryRepository,
+    step_ids: list[UUID],
+) -> dict[UUID, tuple[float, float]]:
+    return await itinerary_repo.get_step_coordinates_batch(db, step_ids)
 
 
 async def get_itinerary_step_weather(
@@ -32,6 +38,9 @@ async def get_itinerary_step_weather(
     if not itinerary.steps:
         return []
 
+    step_ids = [step.id for step in itinerary.steps if step.arrival_time is not None]
+    coord_by_step = await _get_step_coordinates_batch(db, itinerary_repo, step_ids)
+
     forecast_by_date: dict[date, ItineraryStepWeather] = {}
     seen_coords: dict[tuple[float, float], set[date]] = {}
 
@@ -41,18 +50,11 @@ async def get_itinerary_step_weather(
 
         step_date = step.arrival_time.astimezone(CHILE_TZ).date() if step.arrival_time.tzinfo else step.arrival_time.date()
 
-        coord_result = await db.execute(
-            select(
-                sql_func.ST_Y(POIModel.location).label("lat"),
-                sql_func.ST_X(POIModel.location).label("lon"),
-            ).where(POIModel.id == step.poi_id)
-        )
-        coord_row = coord_result.first()
-        if coord_row is None:
+        coords = coord_by_step.get(step.id)
+        if coords is None:
             continue
 
-        step_lat = float(coord_row.lat)
-        step_lon = float(coord_row.lon)
+        step_lat, step_lon = coords
         coord_key = (round(step_lat, 2), round(step_lon, 2))
 
         if coord_key in seen_coords and step_date in seen_coords[coord_key]:

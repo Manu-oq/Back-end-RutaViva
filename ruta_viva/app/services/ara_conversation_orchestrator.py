@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.ara_messages import AraMessages
 from app.core.exceptions import ConcurrencyError
 from app.db.session import AsyncSessionLocal
 from app.models.ara_message import AraMessage
@@ -776,10 +777,7 @@ async def _handle_replace_selection(
     if updated_itinerary is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary or step not found.")
 
-    assistant_text = (
-        f"Listo, reemplace esa parada por {chosen_poi.name}. "
-        "El itinerario quedo actualizado y puedes revisarlo en el mapa o en el detalle."
-    )
+    assistant_text = AraMessages.get("replacement_complete", poi_name=chosen_poi.name)
     try:
         previous_preferences.pop("replacement_context", None)
         session = await _update_session_with_retry(ara_repository, db, session, current_user.id, status="step_replaced", preferences_data=previous_preferences)
@@ -792,8 +790,8 @@ async def _handle_replace_selection(
             quick_replies=[
                 {
                     "id": "ver_itinerario_actualizado",
-                    "label": "Ver itinerario",
-                    "value": f"Ver itinerario {itinerary_id_value}",
+                    "label": AraMessages.get("reply_ver_itinerario_label"),
+                    "value": AraMessages.get("reply_ver_itinerario_value", itinerary_id=itinerary_id_value),
                     "type": "navigation",
                 }
             ],
@@ -870,20 +868,11 @@ async def _handle_candidate_selection(
     quick_replies = build_quick_replies(intent, preferences)
     selected_role = ((preferences.get("trip_draft") or {}).get("selected_pois") or [{}])[-1].get("role")
     if selected_role == "lodging":
-        assistant_text = (
-            f"Perfecto, guardare {selected_poi.name} como alojamiento base probable del viaje. "
-            "Si despues quieres dormir en otra zona, dime el dia o la noche y lo ajusto."
-        )
+        assistant_text = AraMessages.get("selection_lodging", poi_name=selected_poi.name)
     elif selected_role == "meal":
-        assistant_text = (
-            f"Perfecto, guardare {selected_poi.name} como opcion gastronomica y la ubicare donde mejor calce. "
-            "Si la quieres para un dia especifico, dime por ejemplo: lunes almuerzo o ultima noche."
-        )
+        assistant_text = AraMessages.get("selection_meal", poi_name=selected_poi.name)
     else:
-        assistant_text = (
-            f"Perfecto, considerare {selected_poi.name} dentro de la ruta. "
-            "Si no me indicas un dia especifico, lo ubicare automaticamente en el mejor momento."
-        )
+        assistant_text = AraMessages.get("selection_default", poi_name=selected_poi.name)
 
     try:
         session = await _update_session_with_retry(
@@ -1025,7 +1014,7 @@ async def _handle_reset_or_new_trip(
         + quick_replies
     )
     assistant_text = (
-        "Perfecto, dejamos atras el plan anterior y partimos con una idea nueva. "
+        AraMessages.get("session_reset_prefix")
         + build_assistant_message(intent, preferences, candidate_pois, is_first_turn=True)
     )
     if strict_destination:
@@ -1118,8 +1107,8 @@ async def _handle_generate_request(
     quick_replies = [
         AraQuickReply(
             id="generar_itinerario_async",
-            label="Generar itinerario",
-            value="Crear itinerario con lo acordado",
+            label=AraMessages.get("reply_generar_itinerario_label"),
+            value=AraMessages.get("reply_crear_itinerario_value"),
             type="generate",
         )
     ]
@@ -1906,7 +1895,7 @@ async def generate_itinerary_from_session(
         db,
         session.id,
         "assistant",
-        "Listo, armé un itinerario personalizado con lo que conversamos.",
+        AraMessages.get("session_generation_complete"),
         metadata={"generated_itinerary_id": str(itinerary.id)},
     )
     await ara_repository.commit_or_rollback(db)
@@ -1974,10 +1963,7 @@ async def run_ara_itinerary_generation_job(
                 db,
                 session.id,
                 "assistant",
-                (
-                    "Tuve un problema armando el itinerario completo. "
-                    "Puedes intentarlo de nuevo o ajustar un poco la búsqueda."
-                ),
+                AraMessages.get("session_generation_failed"),
                 metadata={
                     "generation_error": True,
                 },

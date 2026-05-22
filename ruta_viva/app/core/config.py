@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     llm_retry_max_delay: float = 10.0
     openweather_api_key: str | None = None
 
+    ara_default_language: str = "es"
+
     secret_key: str
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60

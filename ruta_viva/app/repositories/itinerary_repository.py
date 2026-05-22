@@ -16,6 +16,7 @@ from app.repositories.utils import build_poi_response_from_row, get_category_ids
 from app.schemas.itinerary import (
     GeneratedItinerary,
     ItineraryResponse,
+    ItineraryStepCreate,
     ItineraryStepResponse,
     ItineraryStepUpdate,
     ReorderStepsWithTimesRequest,
@@ -95,15 +96,47 @@ class ItineraryRepository(BaseRepository):
         self,
         db: AsyncSession,
         tourist_id: UUID,
+        offset: int = 0,
+        limit: int = 20,
     ) -> list[ItineraryResponse]:
         stmt = (
             select(Itinerary)
             .options(selectinload(Itinerary.steps).selectinload(ItineraryStep.poi))
             .where(Itinerary.tourist_id == tourist_id)
             .order_by(Itinerary.start_date.desc().nullslast(), Itinerary.title.asc())
+            .offset(offset)
+            .limit(limit)
         )
         result = await db.execute(stmt)
         return [self._to_response(itinerary) for itinerary in result.scalars().all()]
+
+    async def count_itineraries_by_tourist(
+        self,
+        db: AsyncSession,
+        tourist_id: UUID,
+    ) -> int:
+        stmt = select(func.count(Itinerary.id)).where(Itinerary.tourist_id == tourist_id)
+        result = await db.execute(stmt)
+        return result.scalar_one()
+
+    async def get_step_coordinates_batch(
+        self,
+        db: AsyncSession,
+        step_ids: list[UUID],
+    ) -> dict[UUID, tuple[float, float]]:
+        if not step_ids:
+            return {}
+        stmt = (
+            select(
+                ItineraryStep.id,
+                func.ST_Y(POI.location).label("lat"),
+                func.ST_X(POI.location).label("lon"),
+            )
+            .join(POI, POI.id == ItineraryStep.poi_id)
+            .where(ItineraryStep.id.in_(step_ids))
+        )
+        result = await db.execute(stmt)
+        return {step_id: (float(lat), float(lon)) for step_id, lat, lon in result.all()}
 
     async def delete_itinerary(
         self,
@@ -196,6 +229,72 @@ class ItineraryRepository(BaseRepository):
         await db.refresh(itinerary, ["steps"])
         for step in itinerary.steps:
             await db.refresh(step, ["poi"])
+        return self._to_response(itinerary)
+
+    async def add_step(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+        step_data: ItineraryStepCreate,
+    ) -> ItineraryResponse | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        poi = await db.get(POI, step_data.poi_id)
+        if poi is None:
+            raise ValueError("POI not found.")
+
+        if step_data.arrival_time is not None and step_data.departure_time is not None:
+            if step_data.arrival_time >= step_data.departure_time:
+                raise ValueError("arrival_time must be before departure_time.")
+
+        if step_data.arrival_time is not None and itinerary.start_date is not None:
+            if step_data.arrival_time.date() < itinerary.start_date:
+                raise ValueError("arrival_time is before itinerary start_date.")
+        if step_data.departure_time is not None and itinerary.end_date is not None:
+            if step_data.departure_time.date() > itinerary.end_date:
+                raise ValueError("departure_time is after itinerary end_date.")
+
+        existing_orders = [s.step_order for s in itinerary.steps]
+        max_order = max(existing_orders) if existing_orders else 0
+
+        step = ItineraryStep(
+            itinerary_id=itinerary_id,
+            poi_id=step_data.poi_id,
+            step_order=max_order + 1,
+            arrival_time=step_data.arrival_time,
+            departure_time=step_data.departure_time,
+            ai_context=step_data.ai_context,
+        )
+        db.add(step)
+
+        await self._commit_or_rollback(db)
+
+        await db.refresh(itinerary, ["steps"])
+        for s in itinerary.steps:
+            await db.refresh(s, ["poi"])
+        return self._to_response(itinerary)
+
+    async def update_status(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+        new_status: str,
+    ) -> ItineraryResponse | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        itinerary.status = new_status
+
+        await self._commit_or_rollback(db)
+
+        await db.refresh(itinerary, ["steps"])
+        for s in itinerary.steps:
+            await db.refresh(s, ["poi"])
         return self._to_response(itinerary)
 
     async def delete_step(

@@ -10,10 +10,12 @@ from app.core.ara_constants import (
     CULTURE_TERMS,
     DAY_ORDINAL_ALIASES,
     DESTINATION_DISPLAY_NAMES,
+    FOOD_TERMS,
     KNOWN_DESTINATION_NAMES,
     LODGING_TERMS,
     NATURE_TERMS,
     REST_TERMS,
+    SPECIFIC_FOOD_TERMS,
     WEEKDAY_ALIASES,
     WEEKDAY_NAMES,
 )
@@ -21,52 +23,7 @@ from app.schemas.poi import POIResponse
 from app.services.ara_message_normalizer import normalize_message
 from app.services.ara_preference_merger import _estimate_route_ready_score
 
-FOOD_TERMS = (
-    "comer",
-    "comida",
-    "restaurant",
-    "restaurante",
-    "pizza",
-    "pizzería",
-    "pizzeria",
-    "café",
-    "cafe",
-    "gastronomía",
-    "gastronomia",
-    "almorzar",
-    "cenar",
-    "sopa",
-    "sopas",
-    "sopitas",
-    "sopias",
-    "carne",
-    "carnes",
-    "cazuela",
-    "económico",
-    "economico",
-    "picada",
-    "picadas",
-)
-SPECIFIC_FOOD_TERMS = (
-    "pizza",
-    "pizzería",
-    "pizzeria",
-    "café",
-    "cafe",
-    "sushi",
-    "hamburguesa",
-    "pastelería",
-    "pasteleria",
-    "mariscos",
-    "marisco",
-    "comida local",
-    "sopa",
-    "sopas",
-    "sopias",
-    "carne",
-    "carnes",
-    "cazuela",
-)
+
 
 
 def _build_trip_days(

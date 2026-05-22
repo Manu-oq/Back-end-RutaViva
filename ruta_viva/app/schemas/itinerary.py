@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -58,6 +58,18 @@ class ItineraryStepResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ItineraryStepCreate(BaseModel):
+    poi_id: UUID
+    arrival_time: datetime | None = None
+    departure_time: datetime | None = None
+    ai_context: dict[str, Any] | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ItineraryStatusUpdate(BaseModel):
+    status: Literal["planned", "active", "completed", "cancelled"]
+
+
 class ItineraryStepUpdate(BaseModel):
     poi_id: UUID | None = None
     arrival_time: datetime | None = None
@@ -108,3 +120,11 @@ class ItineraryStepWeatherResponse(BaseModel):
     poi_name: str | None = None
     day_date: date | None = None
     weather: ItineraryStepWeather | None = None
+
+
+class PaginatedItineraryResponse(BaseModel):
+    items: list[ItineraryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

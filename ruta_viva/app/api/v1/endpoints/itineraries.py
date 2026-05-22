@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -13,6 +13,7 @@ from app.schemas.itinerary import (
     ItineraryResponse,
     ItineraryStepUpdate,
     ItineraryStepWeatherResponse,
+    PaginatedItineraryResponse,
     ReorderItineraryStepsRequest,
     ReorderStepsWithTimesRequest,
     RescheduleStepRequest,
@@ -30,20 +31,30 @@ poi_repository = POIRepository()
 itinerary_repository = ItineraryRepository()
 
 
-@router.get("/", response_model=list[ItineraryResponse])
+@router.get("/", response_model=PaginatedItineraryResponse)
 async def list_my_itineraries(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[ItineraryResponse]:
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> PaginatedItineraryResponse:
     if current_user.tourist_profile is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only tourist users can list itineraries.",
         )
 
-    return await itinerary_repository.list_itineraries_by_tourist(
-        db,
-        tourist_id=current_user.id,
+    offset = (page - 1) * page_size
+    items = await itinerary_repository.list_itineraries_by_tourist(
+        db, tourist_id=current_user.id, offset=offset, limit=page_size,
+    )
+    total = await itinerary_repository.count_itineraries_by_tourist(
+        db, tourist_id=current_user.id,
+    )
+    total_pages = (total + page_size - 1) // page_size
+
+    return PaginatedItineraryResponse(
+        items=items, total=total, page=page, page_size=page_size, total_pages=total_pages,
     )
 
 
@@ -112,6 +123,35 @@ async def reorder_my_itinerary_steps(
             itinerary_id=itinerary_id,
             tourist_id=current_user.id,
             step_ids=payload.step_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    if itinerary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
+
+    return itinerary
+
+
+@router.post("/{itinerary_id}/steps", response_model=ItineraryResponse, status_code=status.HTTP_201_CREATED)
+async def add_my_itinerary_step(
+    itinerary_id: UUID,
+    payload: ItineraryStepCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ItineraryResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can add itinerary steps.",
+        )
+
+    try:
+        itinerary = await itinerary_repository.add_step(
+            db,
+            itinerary_id=itinerary_id,
+            tourist_id=current_user.id,
+            step_data=payload,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -223,6 +263,31 @@ async def get_my_itinerary(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Itinerary not found.",
         )
+
+    return itinerary
+
+
+@router.patch("/{itinerary_id}/status", response_model=ItineraryResponse)
+async def update_my_itinerary_status(
+    itinerary_id: UUID,
+    payload: ItineraryStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ItineraryResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can update itinerary status.",
+        )
+
+    itinerary = await itinerary_repository.update_status(
+        db,
+        itinerary_id=itinerary_id,
+        tourist_id=current_user.id,
+        new_status=payload.status,
+    )
+    if itinerary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
 
     return itinerary
 

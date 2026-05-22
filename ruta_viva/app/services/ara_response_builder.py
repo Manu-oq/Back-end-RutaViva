@@ -4,6 +4,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from app.core.ara_messages import AraMessages
 from app.schemas.ara import AraQuickReply
 from app.schemas.poi import POIResponse
 from app.services.ara_preference_merger import compact_constraints
@@ -45,72 +46,72 @@ def build_quick_replies(intent: dict[str, Any], preferences: dict[str, Any]) -> 
 
     if primary_intent == "alojamiento":
         options = [
-            ("sumar_comida", "Sumar comida", "Agrega una pausa para comer", "comida"),
-            ("sumar_naturaleza", "Sumar naturaleza", "Agrega naturaleza al viaje", "naturaleza"),
-            ("poco_traslado", "Poco traslado", "Prefiero poco traslado", "poco_traslado"),
-            ("algo_tranquilo", "Algo tranquilo", "Prefiero algo tranquilo", "tranquilo"),
+            ("sumar_comida", AraMessages.get("reply_sumar_comida_label"), AraMessages.get("reply_sumar_comida_value"), "comida"),
+            ("sumar_naturaleza", AraMessages.get("reply_sumar_naturaleza_label"), AraMessages.get("reply_sumar_naturaleza_value"), "naturaleza"),
+            ("poco_traslado", AraMessages.get("reply_poco_traslado_label"), AraMessages.get("reply_poco_traslado_value"), "poco_traslado"),
+            ("algo_tranquilo", AraMessages.get("reply_algo_tranquilo_label"), AraMessages.get("reply_algo_tranquilo_value"), "tranquilo"),
         ]
     elif primary_intent == "gastronomia" and "gastronomia" in completed_dimensions:
         options = [
-            ("sumar_naturaleza", "Sumar naturaleza", "Agrega naturaleza al viaje", "naturaleza"),
-            ("sumar_cultura", "Sumar cultura", "Agrega cultura local al viaje", "cultura"),
-            ("sumar_descanso", "Sumar descanso", "Agrega una actividad tranquila", "descanso"),
+            ("sumar_naturaleza", AraMessages.get("reply_sumar_naturaleza_label"), AraMessages.get("reply_sumar_naturaleza_value"), "naturaleza"),
+            ("sumar_cultura", AraMessages.get("reply_sumar_cultura_label"), AraMessages.get("reply_sumar_cultura_value"), "cultura"),
+            ("sumar_descanso", AraMessages.get("reply_sumar_descanso_label"), AraMessages.get("reply_sumar_descanso_value"), "descanso"),
         ]
     elif primary_intent == "gastronomia" and specificity == "specific":
         options = [
-            ("vista_lago", "Con vista", "Prefiero una opción con vista", "vista"),
-            ("mas_cercano", "Más cercano", "Prioriza lo más cercano", "cercano"),
-            ("ambiente_familiar", "Ambiente familiar", "Busco ambiente familiar", "familiar"),
-            ("rapido_y_simple", "Rápido y simple", "Prefiero algo rápido", "rapido"),
+            ("vista_lago", AraMessages.get("reply_vista_lago_label"), AraMessages.get("reply_vista_lago_value"), "vista"),
+            ("mas_cercano", AraMessages.get("reply_mas_cercano_label"), AraMessages.get("reply_mas_cercano_value"), "cercano"),
+            ("ambiente_familiar", AraMessages.get("reply_ambiente_familiar_label"), AraMessages.get("reply_ambiente_familiar_value"), "familiar"),
+            ("rapido_y_simple", AraMessages.get("reply_rapido_y_simple_label"), AraMessages.get("reply_rapido_y_simple_value"), "rapido"),
         ]
     elif primary_intent == "gastronomia":
         options = [
-            ("comida_local", "Comida local", "Quiero comida local", "comida_local"),
-            ("pizza", "Pizza", "Quiero pizza", "pizza"),
-            ("cafe", "Café", "Quiero un café", "cafe"),
-            ("vista_lago", "Con vista", "Quiero algo con vista", "vista"),
+            ("comida_local", AraMessages.get("reply_comida_local_label"), AraMessages.get("reply_comida_local_value"), "comida_local"),
+            ("pizza", AraMessages.get("reply_pizza_label"), AraMessages.get("reply_pizza_value"), "pizza"),
+            ("cafe", AraMessages.get("reply_cafe_label"), AraMessages.get("reply_cafe_value"), "cafe"),
+            ("vista_lago", AraMessages.get("reply_vista_lago_label"), AraMessages.get("reply_vista_lago_broad_value"), "vista"),
         ]
     elif primary_intent == "naturaleza" and specificity == "specific":
         options = [
-            ("mas_cercano", "Más cercano", "Prioriza lo más cercano", "cercano"),
-            ("baja_dificultad", "Baja dificultad", "Prefiero baja dificultad", "baja_dificultad"),
-            ("mejor_horario", "Mejor horario", "Prioriza el mejor horario", "mejor_horario"),
-            ("combinar_comida", "Sumar comida", "Agrega una pausa para comer", "comida"),
+            ("mas_cercano", AraMessages.get("reply_mas_cercano_label"), AraMessages.get("reply_mas_cercano_value"), "cercano"),
+            ("baja_dificultad", AraMessages.get("reply_baja_dificultad_label"), AraMessages.get("reply_baja_dificultad_value"), "baja_dificultad"),
+            ("mejor_horario", AraMessages.get("reply_mejor_horario_label"), AraMessages.get("reply_mejor_horario_value"), "mejor_horario"),
+            ("combinar_comida", AraMessages.get("reply_combinar_comida_label"), AraMessages.get("reply_combinar_comida_value"), "comida"),
         ]
     elif primary_intent == "naturaleza":
         options = [
-            ("senderos", "Senderos", "Quiero senderos", "sendero"),
-            ("miradores", "Miradores", "Quiero miradores", "mirador"),
-            ("lagos", "Lagos", "Quiero visitar lagos", "lago"),
-            ("aire_libre", "Aire libre", "Quiero actividades al aire libre", "aire_libre"),
+            ("senderos", AraMessages.get("reply_senderos_label"), AraMessages.get("reply_senderos_value"), "sendero"),
+            ("miradores", AraMessages.get("reply_miradores_label"), AraMessages.get("reply_miradores_value"), "mirador"),
+            ("lagos", AraMessages.get("reply_lagos_label"), AraMessages.get("reply_lagos_value"), "lago"),
+            ("aire_libre", AraMessages.get("reply_aire_libre_label"), AraMessages.get("reply_aire_libre_value"), "aire_libre"),
         ]
     elif primary_intent == "cultura":
         options = [
-            ("museos", "Museos", "Quiero museos", "museos"),
-            ("mapuche", "Cultura mapuche", "Quiero cultura mapuche", "mapuche"),
-            ("artesanias", "Artesanías", "Quiero artesanías", "artesanias"),
-            ("historia", "Historia local", "Quiero historia local", "historia"),
+            ("museos", AraMessages.get("reply_museos_label"), AraMessages.get("reply_museos_value"), "museos"),
+            ("mapuche", AraMessages.get("reply_mapuche_label"), AraMessages.get("reply_mapuche_value"), "mapuche"),
+            ("artesanias", AraMessages.get("reply_artesanias_label"), AraMessages.get("reply_artesanias_value"), "artesanias"),
+            ("historia", AraMessages.get("reply_historia_label"), AraMessages.get("reply_historia_value"), "historia"),
         ]
     elif primary_intent == "descanso":
         options = [
-            ("termas", "Termas", "Quiero termas", "termas"),
-            ("tranquilo", "Algo tranquilo", "Busco algo tranquilo", "tranquilo"),
-            ("naturaleza_suave", "Naturaleza suave", "Quiero naturaleza suave", "naturaleza_suave"),
-            ("poco_traslado", "Poco traslado", "Prefiero poco traslado", "poco_traslado"),
+            ("termas", AraMessages.get("reply_termas_label"), AraMessages.get("reply_termas_value"), "termas"),
+            ("tranquilo", AraMessages.get("reply_tranquilo_label"), AraMessages.get("reply_tranquilo_value"), "tranquilo"),
+            ("naturaleza_suave", AraMessages.get("reply_naturaleza_suave_label"), AraMessages.get("reply_naturaleza_suave_value"), "naturaleza_suave"),
+            ("poco_traslado", AraMessages.get("reply_poco_traslado_label"), AraMessages.get("reply_poco_traslado_value"), "poco_traslado"),
         ]
     else:
         options = [
-            ("naturaleza", "Naturaleza", "Quiero naturaleza", "naturaleza"),
-            ("gastronomia", "Comida", "Quiero comida", "gastronomia"),
-            ("cultura", "Cultura", "Quiero cultura", "cultura"),
-            ("descanso", "Descanso", "Quiero algo tranquilo", "descanso"),
+            ("naturaleza", AraMessages.get("reply_naturaleza_label"), AraMessages.get("reply_naturaleza_value"), "naturaleza"),
+            ("gastronomia", AraMessages.get("reply_gastronomia_label"), AraMessages.get("reply_gastronomia_value"), "gastronomia"),
+            ("cultura", AraMessages.get("reply_cultura_label"), AraMessages.get("reply_cultura_value"), "cultura"),
+            ("descanso", AraMessages.get("reply_descanso_label"), AraMessages.get("reply_descanso_value"), "descanso"),
         ]
 
     if turn_count >= 2 and primary_intent not in {"gastronomia", "alojamiento"}:
         options = options + [
-            ("ver_opciones", "Ver opciones", "Muéstrame opciones", "ver_opciones"),
-            ("ajustar_cercania", "Más cercano", "Prioriza cercanía", "cercano"),
-            ("ajustar_ritmo", "Más tranquilo", "Prefiero una ruta tranquila", "tranquilo"),
+            ("ver_opciones", AraMessages.get("reply_ver_opciones_label"), AraMessages.get("reply_ver_opciones_value"), "ver_opciones"),
+            ("ajustar_cercania", AraMessages.get("reply_ajustar_cercania_label"), AraMessages.get("reply_ajustar_cercania_value"), "cercano"),
+            ("ajustar_ritmo", AraMessages.get("reply_ajustar_ritmo_label"), AraMessages.get("reply_ajustar_ritmo_value"), "tranquilo"),
         ]
 
     replies = [
@@ -121,8 +122,8 @@ def build_quick_replies(intent: dict[str, Any], preferences: dict[str, Any]) -> 
     replies.append(
         AraQuickReply(
             id="hazlo_todo_tu",
-            label="Hazlo todo tú",
-            value="Haz una ruta sorpresa equilibrada y completa con alojamiento, comidas y actividades",
+            label=AraMessages.get("reply_hazlo_todo_tu_label"),
+            value=AraMessages.get("reply_hazlo_todo_tu_value"),
             type="refinement",
         )
     )
@@ -130,8 +131,8 @@ def build_quick_replies(intent: dict[str, Any], preferences: dict[str, Any]) -> 
         replies.append(
             AraQuickReply(
                 id="crear_itinerario",
-                label="Crear itinerario",
-                value="Crear itinerario con lo acordado",
+                label=AraMessages.get("reply_crear_itinerario_label"),
+                value=AraMessages.get("reply_crear_itinerario_value"),
                 type="generate",
             )
         )
@@ -143,22 +144,15 @@ def build_generate_request_message(preferences: dict[str, Any]) -> str:
     negative_constraints = preferences.get("negative_constraints") or []
     details: list[str] = []
     if positive_preferences:
-        details.append("priorizaré " + ", ".join(positive_preferences[:3]))
+        details.append(AraMessages.get("generate_detail_positive_prefix") + ", ".join(positive_preferences[:3]))
     if negative_constraints:
-        details.append("evitaré " + ", ".join(negative_constraints[:3]))
-    suffix = f" Además, {', y '.join(details)}." if details else ""
+        details.append(AraMessages.get("generate_detail_negative_prefix") + ", ".join(negative_constraints[:3]))
+    suffix = ""
+    if details:
+        suffix = AraMessages.get("generate_detail_prefix", details=AraMessages.get("generate_detail_joiner").join(details))
     if preferences.get("surprise_route_requested"):
-        return (
-            "Listo, puedo armar una ruta sorpresa equilibrada con lo que ya conversamos. "
-            "No la voy a limitar a una sola categoría: combinaré alojamiento, comidas, actividades, pausas "
-            "y lugares cercanos según tus fechas y ubicación."
-            f"{suffix}"
-        )
-    return (
-        "Listo, puedo crear el itinerario con lo que ya acordamos. "
-        "Usaré las fechas, ubicación, preferencias y lugares seleccionados para armar una ruta coherente y variada."
-        f"{suffix}"
-    )
+        return AraMessages.get("generate_surprise") + suffix
+    return AraMessages.get("generate_normal") + suffix
 
 
 def build_assistant_message(
@@ -174,43 +168,43 @@ def build_assistant_message(
     completed_dimensions = set(preferences.get("completed_dimensions", []))
 
     if preferences.get("surprise_route_requested"):
-        base = "Perfecto, puedo encargarme de equilibrar alojamiento, comidas y actividades"
-        question = "Si quieres, puedo crear el itinerario con lo acordado o seguimos afinando algún detalle."
+        base = AraMessages.get("assistant_surprise_base")
+        question = AraMessages.get("assistant_surprise_question")
     elif primary_intent == "alojamiento":
-        base = "Perfecto, buscaremos alojamiento como base del viaje"
-        question = "Te dejo opciones visuales si hay alternativas; luego podemos sumar comidas y actividades cercanas."
+        base = AraMessages.get("assistant_alojamiento_base")
+        question = AraMessages.get("assistant_alojamiento_question")
     elif primary_intent == "gastronomia" and "gastronomia" in completed_dimensions:
-        base = "Perfecto, dejamos la comida encaminada"
-        question = "Ahora conviene equilibrar el viaje con naturaleza, cultura, descanso o alguna actividad distinta."
+        base = AraMessages.get("assistant_gastronomia_completed_base")
+        question = AraMessages.get("assistant_gastronomia_completed_question")
     elif primary_intent == "gastronomia" and specificity == "specific":
-        base = "Perfecto, ya sé qué tipo de comida buscas"
-        question = "Te dejo opciones en las tarjetas. Después podemos sumar actividades para que la ruta no quede centrada solo en comida."
+        base = AraMessages.get("assistant_gastronomia_specific_base")
+        question = AraMessages.get("assistant_gastronomia_specific_question")
     elif primary_intent == "gastronomia":
-        base = "Perfecto, podemos buscar algo rico para comer"
-        question = "¿Quieres comida local, pizza, café, vista o algo rápido?"
+        base = AraMessages.get("assistant_gastronomia_base")
+        question = AraMessages.get("assistant_gastronomia_question")
     elif primary_intent == "naturaleza" and specificity == "specific":
-        base = "Perfecto, ya tengo una idea clara del panorama natural que buscas"
-        question = "Puedo afinar por dificultad, horario, cercanía o combinarlo con una pausa para comer."
+        base = AraMessages.get("assistant_naturaleza_specific_base")
+        question = AraMessages.get("assistant_naturaleza_specific_question")
     elif primary_intent == "naturaleza":
-        base = "Podemos armar una salida con naturaleza y buenos paisajes"
-        question = "¿Te interesan más senderos, miradores, lagos o actividades suaves?"
+        base = AraMessages.get("assistant_naturaleza_base")
+        question = AraMessages.get("assistant_naturaleza_question")
     elif primary_intent == "cultura":
-        base = "Podemos orientar el recorrido hacia cultura local, historia y patrimonio"
-        question = "¿Quieres algo más histórico, mapuche, artesanal o urbano?"
+        base = AraMessages.get("assistant_cultura_base")
+        question = AraMessages.get("assistant_cultura_question")
     elif primary_intent == "descanso":
-        base = "Puedo armar algo más relajado, con menos traslados y mejores pausas"
-        question = "¿Quieres termas, naturaleza suave o una ruta tranquila con comida?"
+        base = AraMessages.get("assistant_descanso_base")
+        question = AraMessages.get("assistant_descanso_question")
     else:
-        base = "Cuéntame qué tipo de experiencia te gustaría priorizar"
-        question = "¿Qué tipo de experiencia quieres priorizar: naturaleza, comida, cultura o descanso?"
+        base = AraMessages.get("assistant_exploracion_base")
+        question = AraMessages.get("assistant_exploracion_question")
 
     if candidate_pois:
-        base += ". Te dejo opciones visuales en las tarjetas"
+        base += AraMessages.get("assistant_poi_suffix")
     if tags:
-        base += f". Tomaré en cuenta: {', '.join(tags)}"
+        base += AraMessages.get("assistant_tags_suffix", tags=", ".join(tags))
 
     if preferences.get("auto_generate_requested"):
-        return f"Perfecto, puedo encargarme de todo con una ruta equilibrada. {base}."
+        return AraMessages.get("assistant_auto_generate_prefix", base=base)
 
     return f"{base}. {question}"
 
@@ -222,7 +216,7 @@ def build_replacement_quick_replies(
     replies = [
         AraQuickReply(
             id=f"usar_poi_{poi.id}",
-            label=f"Usar {poi.name[:28]}",
+            label=AraMessages.get("reply_usar_poi_prefix") + poi.name[:28],
             value=f"usar poi {poi.id} para step {step_id}",
             type="replace_step",
         )
@@ -231,8 +225,8 @@ def build_replacement_quick_replies(
     replies.append(
         AraQuickReply(
             id="buscar_mas_alternativas",
-            label="Buscar más alternativas",
-            value="Busca más alternativas para esta parada",
+            label=AraMessages.get("reply_buscar_mas_alternativas_label"),
+            value=AraMessages.get("reply_buscar_mas_alternativas_value"),
             type="refinement",
         )
     )
@@ -244,16 +238,10 @@ def build_replacement_message(
     alternatives: list[POIResponse],
 ) -> str:
     if not alternatives:
-        return (
-            f"Entendí que quieres cambiar {current_poi_name}, pero todavía no encontré una alternativa sólida "
-            "con el contexto disponible. Puedes decirme si prefieres algo más cercano, gastronómico, natural o tranquilo."
-        )
+        return AraMessages.get("replacement_no_alternatives", poi_name=current_poi_name)
 
     names = ", ".join(poi.name for poi in alternatives[:3])
-    return (
-        f"Entendí que quieres cambiar la parada {current_poi_name}. Encontré alternativas reales para reemplazarla: "
-        f"{names}. Elige una opción o dime qué criterio priorizar: cercanía, tipo de experiencia, horario o ritmo del viaje."
-    )
+    return AraMessages.get("replacement_with_alternatives", poi_name=current_poi_name, names=names)
 
 
 def compact_candidate_poi(

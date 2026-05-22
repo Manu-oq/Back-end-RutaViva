@@ -3,16 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-TYPO_REPLACEMENTS = {
-    "kiero": "quiero",
-    "qiero": "quiero",
-    "keremos": "queremos",
-    "qeremos": "queremos",
-    "gustaria": "me gustaria",
-    "vehiculo": "vehiculo",
-    "dificil": "dificil",
-    "ninos": "ninos",
-}
+from app.core.ara_constants import TYPO_REPLACEMENTS
 
 
 def normalize_message(message: str) -> str:
