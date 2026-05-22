@@ -3396,3 +3396,97 @@ Ara responde con alternativas y quick replies tipo `replace_step`. Al elegir, ba
 #### Estado resultante de la auditoría
 Ara y los itinerarios tienen una base potente: estado persistente, preferencias acumuladas, búsqueda híbrida, grounding con POIs reales, clima, validaciones deterministas y edición post-generación. Sin embargo, el flujo principal aún es el punto más delicado del producto por tres razones: la máquina de estados no está alineada con DB, la logística real de viaje todavía es débil y el contrato frontend necesita formalizarse mejor. La prioridad ya no debería ser agregar más endpoints, sino estabilizar y hacer confiable la experiencia completa.
 
+---
+
+### [2026-05-22] Ejecución de la auditoría — 4 fases, 25 correcciones
+
+Los hallazgos de la auditoría se corrigieron en 4 fases. Cada fase es un commit independiente en el historial.
+
+#### Fase 1 — Bloqueantes (7 fixes) · commit `f5bb281`
+
+| # | Fix | Archivo | Descripción |
+|---|-----|---------|-------------|
+| B1 | `to_chile_timezone` no importado | `itinerary_generation_service.py:30` | Agregado `from app.core.time_utils import to_chile_timezone` |
+| B2 | `repair_duplicate_poi_steps` vacío | `itinerary_generation_service.py:195-244` | Movida la lógica de reparación desde código muerto al cuerpo de la función |
+| B3 | CHECK constraint vs código | `ara_session.py:25`, migración `b8c9d0e1f2a3` | Expandida constraint de 5 a 9 status (`queued`, `ready_to_generate`, `suggesting_step_replacement`, `step_replaced`) |
+| B4 | Sin índice GiST en `POI.location` | Migración `c9d0e1f2a3b4` | `CREATE INDEX IF NOT EXISTS idx_pois_location ON pois USING GIST (location)` |
+| B5 | 112 líneas de código muerto | `itineraries.py:69-180` | Eliminado bloque inalcanzable post-`return` |
+| B6 | `ara_service.py` dead code | `ara.py` endpoints, eliminado `ara_service.py` | Removido facade de 186 líneas + imports/parámetros huérfanos |
+| B7 | Archivos untracked | 30+ archivos | Commiteados módulos extraídos en refactorización previa |
+
+#### Fase 2a — Observabilidad y experiencia (3 features) · commit `15173b1`
+
+| # | Feature | Archivos | Descripción |
+|---|---------|----------|-------------|
+| 2a.1 | Logging estructurado | `ara_conversation_orchestrator.py` | 113 log calls: 46 info, 40 debug, 13 warning, 10 exception, 4 error. Timing en fases de generación. |
+| 2a.2 | Streaming SSE | `ara_streaming_service.py` (nuevo, 277 líneas), `llm_service.py`, `ara.py` | `POST /sessions/{id}/generate-itinerary/stream`. 6 eventos: searching → weather → generating → validating → saving → result. `stream_callback` en DeepSeek. |
+| 2a.3 | Clasificador LLM | `ara_turn_classifier.py`, `ara_conversation_orchestrator.py` | `classify_turn_llm()` con prompt español, 8 tipos de turno, contexto de sesión. Fallback rule-based si LLM falla o no hay API key. |
+
+#### Fase 2b — Refactor interno y robustez (4 features) · commit `d58e39f`
+
+| # | Feature | Archivos | Descripción |
+|---|---------|----------|-------------|
+| 2b.1 | Use-cases independientes | `ara_conversation_orchestrator.py` | 7 funciones extraídas de `handle_message`. Dispatcher reducido de ~815 a 165 líneas (-80%). |
+| 2b.2 | Optimistic locking | `ara_session.py`, `ara_repository.py`, migración `d0e1f2a3b4c5` | Columna `version` con CHECK > 0. `update_session_context` con `WHERE version = :expected_version`. `_update_session_with_retry` con reintento único. `ConcurrencyError` (409). |
+| 2b.3 | Privacidad de estado interno | `ara.py` schemas | `AraIntentInfo`, `AraPreferenceSummary`, `AraCandidatePOI`. 12 campos internos ya no se filtran al frontend. |
+| 2b.4 | Retry con backoff | `llm_retry.py` (nuevo), `ara_chat_service.py`, `llm_service.py`, `ara_turn_classifier.py` | `with_retry()` genérico. Ara chat: 2 retries → fallback. Itinerary: 1 retry → error. Classifier: 1 retry → rule-based. |
+
+#### Fase 3 — Media prioridad (6 features) · commit `d65074d`
+
+| # | Feature | Archivos | Descripción |
+|---|---------|----------|-------------|
+| 3.1 | Constantes unificadas | `ara_message_normalizer.py`, `ara_trip_draft_builder.py` | `TYPO_REPLACEMENTS`, `FOOD_TERMS`, `SPECIFIC_FOOD_TERMS` importan de `ara_constants.py`. |
+| 3.2 | Paginación en itinerarios | `itineraries.py`, `itinerary_repository.py`, `itinerary.py` schemas | `GET /itineraries?page=1&page_size=20`. `PaginatedItineraryResponse`. |
+| 3.3 | Add step a itinerario | `itineraries.py`, `itinerary_repository.py`, `itinerary.py` schemas | `POST /itineraries/{id}/steps` con `ItineraryStepCreate`. |
+| 3.4 | Status de itinerario | `itineraries.py`, `itinerary_repository.py` | `PATCH /itineraries/{id}/status` con `Literal["planned","active","completed","cancelled"]`. |
+| 3.5 | Weather batch query | `itinerary_weather_service.py`, `itinerary_repository.py` | `get_step_coordinates_batch()` con JOIN. N+1 eliminado. |
+| 3.6 | i18n para Ara | `ara_messages.py` (nuevo), `ara_response_builder.py`, `ara_conversation_orchestrator.py` | `AraMessages` con 141 message keys. Strings hardcodeados migrados. Preparado para multi-idioma. |
+
+#### Fase 4 — Baja prioridad (5 features) · commit `009f514`
+
+| # | Feature | Archivos | Descripción |
+|---|---------|----------|-------------|
+| 4.2 | `multimedia_urls` dict-only | `poi.py` model, `poi_repository.py`, migración `d5e1f2a3b4c5` | Eliminado soporte `list`. Siempre `{"cover": null, "gallery": []}`. |
+| 4.3 | Timestamps en steps | `itinerary_step.py`, `itinerary.py` schemas, migración `e2f3a4b5c6d7` | `created_at` y `updated_at` en `ItineraryStep`. |
+| 4.4 | POIVisit conectado | `poi_visit.py`, `user.py`, `itinerary_repository.py`, `itineraries.py` | `POST /itineraries/{id}/steps/{step_id}/visit`, `GET /itineraries/{id}/visits`. Auto-creación en generación. |
+| 4.5 | Export/share itinerario | `itinerary.py` model, `shared.py` endpoint, migración `f3a4b5c6d7e8` | `GET /itineraries/{id}/export`, `POST/DELETE /itineraries/{id}/share`, `GET /share/{public_id}` (público). |
+
+#### Correlación hallazgos → fixes
+
+| Hallazgo de auditoría | Corregido en |
+|-----------------------|-------------|
+| Estados Ara vs constraint DB | Fase 1 — B3 |
+| Código muerto post-return | Fase 1 — B5 |
+| `ara_service` dead code | Fase 1 — B6 |
+| Sin observabilidad | Fase 2a — 2a.1 |
+| Sin feedback de progreso | Fase 2a — 2a.2 |
+| Clasificador rule-based frágil | Fase 2a — 2a.3 |
+| `handle_message` god function | Fase 2b — 2b.1 |
+| Race condition en sesiones | Fase 2b — 2b.2 |
+| Estado interno expuesto | Fase 2b — 2b.3 |
+| Sin retry en LLM | Fase 2b — 2b.4 |
+| Constantes duplicadas | Fase 3 — 3.1 |
+| Sin paginación | Fase 3 — 3.2 |
+| Sin add step | Fase 3 — 3.3 |
+| Sin status transitions | Fase 3 — 3.4 |
+| Weather N+1 queries | Fase 3 — 3.5 |
+| Textos hardcodeados | Fase 3 — 3.6 |
+| `multimedia_urls` tipo inconsistente | Fase 4 — 4.2 |
+| Sin timestamps en steps | Fase 4 — 4.3 |
+| POIVisit no conectado | Fase 4 — 4.4 |
+| Sin export/share | Fase 4 — 4.5 |
+
+#### Estado post-ejecución
+
+25 de 25 correcciones aplicadas. El sistema ahora:
+- Compila y ejecuta sin errores de importación ni constraint
+- Tiene logging estructurado en todo el pipeline Ara
+- Soporta streaming SSE para generación de itinerarios
+- Tiene clasificación de intención con LLM + fallback rule-based
+- `handle_message` pasó de 815 a 165 líneas con 7 use-cases independientes
+- Tiene optimistic locking que previene race conditions
+- No expone estado interno al frontend
+- Tiene retry con exponential backoff en todas las llamadas LLM
+- Tiene paginación, i18n (141 keys), weather batch, y 8 endpoints nuevos
+- Soporta export y share público de itinerarios sin autenticación
+
