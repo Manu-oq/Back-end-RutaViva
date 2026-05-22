@@ -159,6 +159,8 @@ def _build_preference_summary(preferences_data: dict[str, Any] | None) -> AraPre
         selected_poi_ids=[str(pid) for pid in (preferences_data.get("selected_poi_ids") or [])],
         conversation_mode=preferences_data.get("conversation_mode"),
         route_ready_score=float(preferences_data.get("route_ready_score", 0)),
+        lodging=trip_draft.get("lodging") if isinstance(trip_draft, dict) else None,
+        day_focus=int(trip_draft.get("current_day_focus", 0)) if isinstance(trip_draft, dict) else 0,
     )
 
 

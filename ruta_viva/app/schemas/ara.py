@@ -79,6 +79,8 @@ class AraPreferenceSummary(BaseModel):
     selected_poi_ids: list[str] = Field(default_factory=list)
     conversation_mode: str | None = None
     route_ready_score: float = 0.0
+    lodging: dict[str, Any] | None = None
+    day_focus: int = 0
 
 
 class AraCandidatePOI(BaseModel):
@@ -106,6 +108,7 @@ class AraSessionResponse(BaseModel):
     active_itinerary_id: UUID | None = None
     destination_context: dict[str, Any] | None = None
     weather: dict[str, Any] | None = None
+    progress: dict[str, Any] | None = None
 
 
 class AraMessagesResponse(BaseModel):
