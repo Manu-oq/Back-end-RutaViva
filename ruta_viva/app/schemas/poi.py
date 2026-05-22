@@ -10,7 +10,7 @@ class POIBase(BaseModel):
     access_type: str
     contact_phone: str | None = None
     contact_email: str | None = None
-    multimedia_urls: dict[str, Any] | list[Any] | None = None
+    multimedia_urls: dict[str, Any] | None = None
     opening_hours_text: str | None = None
     visit_rules: dict[str, Any] | None = None
     category_ids: list[int] = Field(default_factory=list)

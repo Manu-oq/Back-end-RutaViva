@@ -12,6 +12,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.entrepreneur_profile import EntrepreneurProfile
+    from app.models.poi_visit import POIVisit
     from app.models.tourist_profile import TouristProfile
 
 
@@ -40,6 +41,8 @@ class User(Base):
         uselist=False,
         lazy="selectin",
     )
+
+    visits: Mapped[list[POIVisit]] = relationship(back_populates="visitor", lazy="selectin")
 
     @property
     def display_name(self) -> str | None:

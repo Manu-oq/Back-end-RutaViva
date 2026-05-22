@@ -17,6 +17,8 @@ from app.schemas.itinerary import (
     ReorderItineraryStepsRequest,
     ReorderStepsWithTimesRequest,
     RescheduleStepRequest,
+    StepVisitRequest,
+    StepVisitResponse,
 )
 from app.schemas.poi import POIResponse
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
@@ -363,3 +365,129 @@ async def get_my_itinerary_weather(
     return await get_itinerary_step_weather(
         db, itinerary_id, current_user.id, itinerary_repository, weather_service_module,
     )
+
+
+@router.get("/{itinerary_id}/export", response_model=ItineraryExportResponse)
+async def export_my_itinerary(
+    itinerary_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ItineraryExportResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can export itineraries.",
+        )
+
+    export_data = await itinerary_repository.get_export_data(
+        db, itinerary_id=itinerary_id, tourist_id=current_user.id,
+    )
+    if export_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Itinerary not found.",
+        )
+
+    return export_data
+
+
+@router.post("/{itinerary_id}/share", response_model=ShareResponse)
+async def share_my_itinerary(
+    itinerary_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ShareResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can share itineraries.",
+        )
+
+    public_id = await itinerary_repository.generate_public_id(
+        db, itinerary_id=itinerary_id, tourist_id=current_user.id,
+    )
+    if public_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Itinerary not found.",
+        )
+
+    return ShareResponse(share_url=f"/share/{public_id}", public_id=public_id)
+
+
+@router.delete("/{itinerary_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+async def unshare_my_itinerary(
+    itinerary_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can unshare itineraries.",
+        )
+
+    cleared = await itinerary_repository.clear_public_id(
+        db, itinerary_id=itinerary_id, tourist_id=current_user.id,
+    )
+    if not cleared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Itinerary not found.",
+        )
+
+    return None
+
+
+@router.post("/{itinerary_id}/steps/{step_id}/visit", response_model=StepVisitResponse, status_code=status.HTTP_201_CREATED)
+async def visit_my_itinerary_step(
+    itinerary_id: UUID,
+    step_id: UUID,
+    payload: StepVisitRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StepVisitResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can mark steps as visited.",
+        )
+
+    try:
+        visit = await itinerary_repository.record_step_visit(
+            db,
+            itinerary_id=itinerary_id,
+            tourist_id=current_user.id,
+            step_id=step_id,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if visit is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary or step not found.")
+
+    return visit
+
+
+@router.get("/{itinerary_id}/visits", response_model=list[StepVisitResponse])
+async def get_my_itinerary_visits(
+    itinerary_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[StepVisitResponse]:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can view itinerary visits.",
+        )
+
+    visits = await itinerary_repository.get_visits_for_itinerary(
+        db,
+        itinerary_id=itinerary_id,
+        tourist_id=current_user.id,
+    )
+    if visits is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
+
+    return visits

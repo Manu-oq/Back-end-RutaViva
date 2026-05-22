@@ -53,7 +53,9 @@ class POI(Base):
     access_type: Mapped[str] = mapped_column(String(50), nullable=False)
     contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    multimedia_urls: Mapped[dict[str, Any] | list[Any] | None] = mapped_column(JSONB, nullable=True)
+    multimedia_urls: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=lambda: {"cover": None, "gallery": []}
+    )
     opening_hours_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     visit_rules: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     verification_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending")

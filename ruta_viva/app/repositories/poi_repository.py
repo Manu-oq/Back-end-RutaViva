@@ -377,33 +377,24 @@ class POIRepository(BaseRepository):
 
     def _append_image_to_media(
         self,
-        media: object,
+        media: dict[str, Any] | None,
         image_url: str,
-    ) -> dict[str, object] | list[object]:
-        if isinstance(media, list):
-            updated = list(media)
-            if image_url not in updated:
-                updated.append(image_url)
-            return updated
+    ) -> dict[str, Any]:
+        if media is None:
+            media = {"cover": None, "gallery": []}
 
-        if isinstance(media, dict):
-            gallery = media.get("gallery")
-            if not isinstance(gallery, list):
-                gallery = []
+        gallery = media.get("gallery")
+        if not isinstance(gallery, list):
+            gallery = []
 
-            if image_url not in gallery:
-                gallery.append(image_url)
+        if image_url not in gallery:
+            gallery.append(image_url)
 
-            updated = dict(media)
-            updated["gallery"] = gallery
-            if not updated.get("cover"):
-                updated["cover"] = image_url
-            return updated
-
-        return {
-            "cover": image_url,
-            "gallery": [image_url],
-        }
+        updated = dict(media)
+        updated["gallery"] = gallery
+        if not updated.get("cover"):
+            updated["cover"] = image_url
+        return updated
 
     async def recalculate_confidence(self, db: AsyncSession, poi_id: UUID) -> float:
         poi = await db.get(POI, poi_id)
@@ -412,12 +403,7 @@ class POIRepository(BaseRepository):
     
         score = 0.0
     
-        has_image = False
-        if poi.multimedia_urls is not None:
-            if isinstance(poi.multimedia_urls, dict):
-                has_image = bool(poi.multimedia_urls.get("cover")) or bool(poi.multimedia_urls.get("gallery"))
-            elif isinstance(poi.multimedia_urls, list) and len(poi.multimedia_urls) > 0:
-                has_image = True
+        has_image = bool(poi.multimedia_urls and (poi.multimedia_urls.get("cover") or poi.multimedia_urls.get("gallery")))
         if has_image:
             score += 0.2
     

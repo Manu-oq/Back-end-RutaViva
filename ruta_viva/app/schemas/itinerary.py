@@ -54,6 +54,8 @@ class ItineraryStepResponse(BaseModel):
     day_date: date | None = None
     day_label: str | None = None
     ai_context: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -122,9 +124,52 @@ class ItineraryStepWeatherResponse(BaseModel):
     weather: ItineraryStepWeather | None = None
 
 
+class ItineraryExportStep(BaseModel):
+    day: int
+    date: str
+    order: int
+    poi_name: str
+    poi_description: str | None = None
+    poi_address: str | None = None
+    arrival_time: str | None = None
+    departure_time: str | None = None
+    tips: str | None = None
+    weather: dict[str, Any] | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class ItineraryExportResponse(BaseModel):
+    title: str
+    start_date: str | None = None
+    end_date: str | None = None
+    steps: list[ItineraryExportStep]
+    total_days: int
+    total_steps: int
+    generated_at: str | None = None
+
+
+class ShareResponse(BaseModel):
+    share_url: str
+    public_id: str
+
+
 class PaginatedItineraryResponse(BaseModel):
     items: list[ItineraryResponse]
     total: int
     page: int
     page_size: int
     total_pages: int
+
+
+class StepVisitRequest(BaseModel):
+    note: str | None = None
+
+
+class StepVisitResponse(BaseModel):
+    id: UUID
+    step_id: UUID
+    poi_id: UUID
+    visited_at: datetime
+    source: str = "itinerary"
+    note: str | None = None

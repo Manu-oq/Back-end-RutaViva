@@ -40,4 +40,8 @@ class POIVisit(Base):
     source: Mapped[str] = mapped_column(String(80), nullable=False, default="frontend", server_default="frontend")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    visitor: Mapped[User | None] = relationship(back_populates="visits", lazy="selectin")
+
     poi: Mapped[POI] = relationship(back_populates="visits", lazy="selectin")

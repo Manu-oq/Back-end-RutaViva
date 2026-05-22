@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.deps import get_current_user
 from app.api.v1.api import api_router
+from app.api.v1.endpoints.shared import router as shared_router
 import app.db.models  # noqa: F401
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.include_router(shared_router, prefix="/share")
 
 
 def _resolve_media_path(filename: str) -> Path:

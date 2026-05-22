@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+import secrets
+import string
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
 from app.core.time_utils import CHILE_TZ, to_chile_timezone
@@ -11,10 +13,13 @@ from sqlalchemy.orm import selectinload
 from app.models.itinerary import Itinerary
 from app.models.itinerary_step import ItineraryStep
 from app.models.poi import POI
+from app.models.poi_visit import POIVisit
 from app.repositories.base import BaseRepository
 from app.repositories.utils import build_poi_response_from_row, get_category_ids_batch
 from app.schemas.itinerary import (
     GeneratedItinerary,
+    ItineraryExportResponse,
+    ItineraryExportStep,
     ItineraryResponse,
     ItineraryStepCreate,
     ItineraryStepResponse,
@@ -60,6 +65,15 @@ class ItineraryRepository(BaseRepository):
                         ai_context=step.ai_context,
                     )
                 )
+
+            db.add_all([
+                POIVisit(
+                    poi_id=step.poi_id,
+                    visitor_id=tourist_id,
+                    source="itinerary",
+                )
+                for step in ordered_steps
+            ])
 
             await self._commit_or_rollback(db)
         except Exception:
@@ -543,6 +557,228 @@ class ItineraryRepository(BaseRepository):
         for step in itinerary.steps:
             await db.refresh(step, ["poi"])
         return self._to_response(itinerary)
+
+    async def get_export_data(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+    ) -> ItineraryExportResponse | None:
+        stmt = (
+            select(Itinerary)
+            .options(selectinload(Itinerary.steps).selectinload(ItineraryStep.poi))
+            .where(Itinerary.id == itinerary_id)
+            .where(Itinerary.tourist_id == tourist_id)
+        )
+        result = await db.execute(stmt)
+        itinerary = result.scalar_one_or_none()
+        if itinerary is None:
+            return None
+
+        coords = await self.get_step_coordinates_batch(
+            db, [s.id for s in itinerary.steps]
+        )
+        return self._to_export_response(itinerary, coords)
+
+    async def get_export_data_by_public_id(
+        self,
+        db: AsyncSession,
+        public_id: str,
+    ) -> ItineraryExportResponse | None:
+        itinerary = await self.get_itinerary_by_public_id(db, public_id)
+        if itinerary is None:
+            return None
+
+        coords = await self.get_step_coordinates_batch(
+            db, [s.id for s in itinerary.steps]
+        )
+        return self._to_export_response(itinerary, coords)
+
+    def _to_export_response(
+        self,
+        itinerary: Itinerary,
+        coords: dict[UUID, tuple[float, float]],
+    ) -> ItineraryExportResponse:
+        start_date = itinerary.start_date
+        steps: list[ItineraryExportStep] = []
+        for step in itinerary.steps:
+            arrival_time = to_chile_timezone(step.arrival_time)
+            departure_time = to_chile_timezone(step.departure_time)
+            day_date = arrival_time.date() if arrival_time is not None else None
+            day_index = None
+            if day_date is not None and start_date is not None:
+                day_index = (day_date - start_date).days + 1
+
+            lat, lon = coords.get(step.id, (None, None))
+
+            steps.append(
+                ItineraryExportStep(
+                    day=day_index or 1,
+                    date=day_date.isoformat() if day_date is not None else "",
+                    order=step.step_order,
+                    poi_name=step.poi.name if step.poi is not None else "",
+                    poi_description=step.poi.description if step.poi is not None else None,
+                    poi_address=None,
+                    arrival_time=arrival_time.strftime("%H:%M") if arrival_time is not None else None,
+                    departure_time=departure_time.strftime("%H:%M") if departure_time is not None else None,
+                    tips=None,
+                    weather=None,
+                    latitude=lat,
+                    longitude=lon,
+                )
+            )
+
+        total_days = 1
+        if start_date is not None and itinerary.end_date is not None:
+            total_days = (itinerary.end_date - start_date).days + 1
+
+        generated_at = datetime.now(timezone.utc).isoformat()
+
+        return ItineraryExportResponse(
+            title=itinerary.title,
+            start_date=start_date.isoformat() if start_date is not None else None,
+            end_date=itinerary.end_date.isoformat() if itinerary.end_date is not None else None,
+            steps=steps,
+            total_days=total_days,
+            total_steps=len(steps),
+            generated_at=generated_at,
+        )
+
+    async def get_itinerary_by_public_id(
+        self,
+        db: AsyncSession,
+        public_id: str,
+    ) -> Itinerary | None:
+        stmt = (
+            select(Itinerary)
+            .options(selectinload(Itinerary.steps).selectinload(ItineraryStep.poi))
+            .where(Itinerary.public_id == public_id)
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def generate_public_id(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+    ) -> str | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        if itinerary.public_id is not None:
+            return itinerary.public_id
+
+        alphabet = string.ascii_letters + string.digits
+        for _ in range(10):
+            candidate = "".join(secrets.choice(alphabet) for _ in range(8))
+            exists = await db.execute(
+                select(Itinerary.id).where(Itinerary.public_id == candidate)
+            )
+            if exists.scalar_one_or_none() is None:
+                itinerary.public_id = candidate
+                await self._commit_or_rollback(db)
+                return candidate
+
+        raise ValueError("Could not generate a unique public_id after 10 attempts")
+
+    async def clear_public_id(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+    ) -> bool:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return False
+
+        itinerary.public_id = None
+        await self._commit_or_rollback(db)
+        return True
+
+    async def record_step_visit(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+        step_id: UUID,
+        note: str | None = None,
+    ) -> StepVisitResponse | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        step = next((s for s in itinerary.steps if s.id == step_id), None)
+        if step is None:
+            return None
+
+        existing = await db.execute(
+            select(POIVisit).where(
+                POIVisit.poi_id == step.poi_id,
+                POIVisit.visitor_id == tourist_id,
+                POIVisit.source == "itinerary",
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ValueError("This step has already been marked as visited.")
+
+        visit = POIVisit(
+            poi_id=step.poi_id,
+            visitor_id=tourist_id,
+            source="itinerary",
+            note=note,
+        )
+        db.add(visit)
+        await self._commit_or_rollback(db)
+        await db.refresh(visit)
+
+        return StepVisitResponse(
+            id=visit.id,
+            step_id=step.id,
+            poi_id=visit.poi_id,
+            visited_at=visit.created_at,
+            source=visit.source,
+            note=visit.note,
+        )
+
+    async def get_visits_for_itinerary(
+        self,
+        db: AsyncSession,
+        itinerary_id: UUID,
+        tourist_id: UUID,
+    ) -> list[StepVisitResponse] | None:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return None
+
+        poi_ids = [step.poi_id for step in itinerary.steps]
+        if not poi_ids:
+            return []
+
+        step_by_poi = {step.poi_id: step.id for step in itinerary.steps}
+
+        result = await db.execute(
+            select(POIVisit)
+            .where(
+                POIVisit.poi_id.in_(poi_ids),
+                POIVisit.visitor_id == tourist_id,
+            )
+            .order_by(POIVisit.created_at.desc())
+        )
+        visits = result.scalars().all()
+
+        return [
+            StepVisitResponse(
+                id=visit.id,
+                step_id=step_by_poi.get(visit.poi_id),
+                poi_id=visit.poi_id,
+                visited_at=visit.created_at,
+                source=visit.source,
+                note=visit.note,
+            )
+            for visit in visits
+        ]
 
     def _to_response(self, itinerary: Itinerary) -> ItineraryResponse:
         start_date = itinerary.start_date

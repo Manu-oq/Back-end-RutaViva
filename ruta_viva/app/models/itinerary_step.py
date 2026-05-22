@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +46,8 @@ class ItineraryStep(Base):
     arrival_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     departure_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ai_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     itinerary: Mapped[Itinerary] = relationship(back_populates="steps", lazy="selectin")
     poi: Mapped[POI] = relationship(back_populates="itinerary_steps", lazy="selectin")
