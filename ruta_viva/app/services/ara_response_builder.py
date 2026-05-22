@@ -121,22 +121,28 @@ def build_quick_replies(intent: dict[str, Any], preferences: dict[str, Any]) -> 
     ]
     replies.append(
         AraQuickReply(
-            id="hazlo_todo_tu",
-            label=AraMessages.get("reply_hazlo_todo_tu_label"),
-            value=AraMessages.get("reply_hazlo_todo_tu_value"),
-            type="refinement",
+            id="que_arme_ara",
+            label=AraMessages.get("cta_que_arme_ara"),
+            value=AraMessages.get("cta_que_arme_ara"),
+            type="generate",
         )
     )
-    if should_offer_create_itinerary(preferences) and "crear_itinerario" not in consumed_reply_ids:
+
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    current_focus = draft.get("current_day_focus", 0)
+    if len(trip_days) >= 2 and current_focus < len(trip_days) - 1:
+        next_day = trip_days[current_focus + 1]
         replies.append(
             AraQuickReply(
-                id="crear_itinerario",
-                label=AraMessages.get("reply_crear_itinerario_label"),
-                value=AraMessages.get("reply_crear_itinerario_value"),
-                type="generate",
+                id="skip_to_next_day",
+                label=AraMessages.get("cta_pasemos_al", day=next_day.get("day_label", "siguiente")),
+                value=f"pasemos al {next_day.get('day_label', 'siguiente')}",
+                type="navigation",
             )
         )
-    return dedupe_quick_replies(replies)[:6]
+
+    return dedupe_quick_replies(replies)[:8]
 
 
 def build_generate_request_message(preferences: dict[str, Any]) -> str:
@@ -309,3 +315,150 @@ def build_refined_query(
         f"Tags acumulados: {safe_preferences.get('tags', [])}\n"
         f"Dimensiones completadas: {safe_preferences.get('completed_dimensions', [])}"
     )
+
+
+def build_day_greeting(preferences: dict[str, Any]) -> str:
+    from app.services.ara_trip_draft_builder import get_current_day
+    current_day = get_current_day(preferences)
+    if not current_day:
+        return AraMessages.get("day_what_to_do", day="hoy")
+    label = current_day.get("day_label", "hoy")
+    weather_data = current_day.get("weather")
+    if weather_data:
+        summary = f"{weather_data.get('description', 'Sin datos')}, {weather_data.get('temperature_c', '--')}C"
+        return AraMessages.get("day_greeting_with_weather", day=label, weather_summary=summary)
+    return AraMessages.get("day_what_to_do", day=label)
+
+
+def build_progress_summary(preferences: dict[str, Any]) -> dict[str, Any]:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    lodging = draft.get("lodging")
+    current_focus = draft.get("current_day_focus", 0)
+
+    days_progress = []
+    for i, day in enumerate(trip_days):
+        day_info = {
+            "label": day.get("day_label", f"Dia {i+1}"),
+            "date": day.get("day_date", ""),
+            "day_index": day.get("day_index", i + 1),
+            "status": day.get("status", "pending"),
+            "is_focus": i == current_focus,
+            "steps": len(day.get("selected_pois", []) or []),
+        }
+        days_progress.append(day_info)
+
+    summary: dict[str, Any] = {
+        "total_days": len(trip_days),
+        "current_day_focus": current_focus,
+        "days": days_progress,
+    }
+    if lodging:
+        summary["lodging"] = {
+            "name": lodging.get("name"),
+            "mode": lodging.get("mode"),
+        }
+    return summary
+
+
+def build_lodging_mode_chips(preferences: dict[str, Any], lodging_name: str) -> list[AraQuickReply]:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    chips: list[AraQuickReply] = [
+        AraQuickReply(
+            id="lodging_mode_all",
+            label=AraMessages.get("lodging_mode_all"),
+            value="todos los dias",
+            type="lodging",
+        )
+    ]
+    if len(trip_days) >= 2:
+        chips.append(AraQuickReply(
+            id="lodging_mode_weekend",
+            label=AraMessages.get("lodging_mode_weekend"),
+            value="el finde nomas",
+            type="lodging",
+        ))
+    for day in trip_days[:7]:
+        label = day.get("day_label", "")
+        day_index = day.get("day_index", 0)
+        chips.append(AraQuickReply(
+            id=f"lodging_mode_day_{day_index}",
+            label=AraMessages.get("lodging_mode_single", day=label),
+            value=f"solo el {label.split()[0].lower()}",
+            type="lodging",
+        ))
+    return chips[:8]
+
+
+def build_start_of_flow_chips() -> list[AraQuickReply]:
+    return [
+        AraQuickReply(
+            id="empezar_alojamiento",
+            label=AraMessages.get("cta_empezar_alojamiento"),
+            value="empecemos por alojamiento",
+            type="navigation",
+        ),
+        AraQuickReply(
+            id="empezar_actividades",
+            label=AraMessages.get("cta_empezar_actividades"),
+            value="empecemos por actividades",
+            type="navigation",
+        ),
+        AraQuickReply(
+            id="que_arme_ara_start",
+            label=AraMessages.get("cta_que_arme_ara"),
+            value=AraMessages.get("cta_que_arme_ara"),
+            type="generate",
+        ),
+    ]
+
+
+def build_day_navigation_chips(preferences: dict[str, Any]) -> list[AraQuickReply]:
+    draft = (preferences.get("trip_draft") or {}) if preferences else {}
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    current_focus = draft.get("current_day_focus", 0)
+    chips: list[AraQuickReply] = []
+
+    if current_focus < len(trip_days) - 1:
+        next_day = trip_days[current_focus + 1]
+        chips.append(AraQuickReply(
+            id="skip_to_next_day",
+            label=AraMessages.get("cta_pasemos_al", day=next_day.get("day_label", "siguiente")),
+            value=f"pasemos al {next_day.get('day_label', 'siguiente')}",
+            type="navigation",
+        ))
+
+    chips.append(AraQuickReply(
+        id="que_arme_ara_nav",
+        label=AraMessages.get("cta_que_arme_ara"),
+        value=AraMessages.get("cta_que_arme_ara"),
+        type="generate",
+    ))
+
+    return chips
+
+
+def build_lodging_disclaimer_message() -> str:
+    return AraMessages.get("lodging_disclaimer")
+
+
+def build_lodging_ask_if_needed_message() -> str:
+    return AraMessages.get("lodging_ask_if_needed")
+
+
+def build_lodging_ask_mode_message(lodging_name: str) -> str:
+    return AraMessages.get("lodging_ask_mode", name=lodging_name)
+
+
+def build_lodging_selected_message(lodging_name: str, mode: str | list[int]) -> str:
+    draft_mode = "para todo el viaje" if mode == "all_days" else "para los dias seleccionados"
+    return AraMessages.get("lodging_selected", name=lodging_name, detail=f" ({draft_mode})")
+
+
+def build_day_skip_warning_message(day_label: str) -> str:
+    return AraMessages.get("day_skip_confirm", day=day_label)
+
+
+def build_day_empty_warning_message(day_label: str) -> str:
+    return AraMessages.get("day_empty_warning", day=day_label)
