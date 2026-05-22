@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncGenerator
 from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -31,6 +34,7 @@ from app.services.ara_conversation_orchestrator import (
     session_message_response,
 )
 from app.services.ara_chat_service import AraChatService, get_ara_chat_service
+from app.services.ara_streaming_service import stream_itinerary_generation
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 from app.services.llm_service import ItineraryGenerator, get_itinerary_generator
 
@@ -107,6 +111,33 @@ async def generate_itinerary_from_ara_session(
         embedding_service=embedding_service,
         llm_service=llm_service,
     )
+
+
+@router.post(
+    "/sessions/{session_id}/generate-itinerary/stream",
+)
+async def stream_generate_itinerary(
+    session_id: UUID,
+    payload: AraGenerateItineraryRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
+    llm_service: ItineraryGenerator = Depends(get_itinerary_generator),
+) -> StreamingResponse:
+    _ensure_tourist(current_user)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        async for event in stream_itinerary_generation(
+            session_id=session_id,
+            payload=payload,
+            db=db,
+            current_user=current_user,
+            embedding_service=embedding_service,
+            llm_service=llm_service,
+        ):
+            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post(

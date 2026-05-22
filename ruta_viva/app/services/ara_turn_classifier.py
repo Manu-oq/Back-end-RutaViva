@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
 from typing import Any
 from uuid import UUID
+
+from openai import AsyncOpenAI
 
 from app.core.ara_constants import (
     ADVENTURE_TERMS,
@@ -24,7 +28,128 @@ from app.core.ara_constants import (
     USE_POI_PATTERN,
     UUID_PATTERN,
 )
+from app.core.config import settings
 from app.services.ara_message_normalizer import normalize_message
+
+logger = logging.getLogger(__name__)
+
+_CLASSIFICATION_PROMPT = (
+    "Eres un clasificador de intenciones para un asistente de viajes turisticos en La Araucania, Chile.\n"
+    "Debes clasificar el mensaje del usuario en UNO de los siguientes tipos de turno:\n"
+    "\n"
+    "1. replace_step: El usuario quiere reemplazar un paso especifico de un itinerario existente.\n"
+    "   Ejemplos: \"cambia la visita al museo por otra cosa\", \"reemplaza el restaurante por uno mas economico\", \"pon otro lugar en vez del lago\"\n"
+    "\n"
+    "2. candidate_selection: El usuario selecciona una de las opciones que se le mostraron.\n"
+    "   Ejemplos: \"quiero la opcion 2\", \"me gusta el primero\", \"ese\", \"el de la playa\", \"prefiero el restaurant\"\n"
+    "\n"
+    "3. reset_or_new_trip: El usuario quiere empezar de cero o planear un viaje completamente nuevo.\n"
+    "   Ejemplos: \"olvidalo todo\", \"empecemos de nuevo\", \"mejor hagamos otro plan\", \"partamos de cero\"\n"
+    "\n"
+    "4. generate_request: El usuario pide explicitamente generar o crear el itinerario.\n"
+    "   Ejemplos: \"genera el itinerario\", \"crea la ruta\", \"arma el viaje\", \"dame el plan completo\"\n"
+    "\n"
+    "5. free_question: El usuario hace una pregunta sobre un destino, actividad o servicio.\n"
+    "   Ejemplos: \"que clima hara?\", \"es dificil el sendero?\", \"cuanto cuesta la entrada?\", \"donde queda?\"\n"
+    "\n"
+    "6. replacement_request: El usuario proporciona instrucciones explicitas para reemplazar un paso.\n"
+    "   Ejemplos: \"reemplaza el paso de la manana por algo mejor\", \"cambia el tercer dia\"\n"
+    "\n"
+    "7. refinement: El usuario ajusta preferencias, restricciones o detalles de lo que busca.\n"
+    "   Ejemplos: \"quiero algo mas tranquilo\", \"prefiero comida italiana\", \"busco algo para ninos\", \"nada de caminatas largas\"\n"
+    "\n"
+    "8. general_chat: Conversacion general o amable que no calza en los tipos anteriores.\n"
+    "   Ejemplos: \"hola\", \"gracias\", \"que tal\", \"oye y tu que recomiendas?\"\n"
+    "\n"
+    "Ademas extrae la siguiente informacion adicional del mensaje:\n"
+    "- primary_intent: La intencion principal (meal, activity, lodging, info, nature, culture, general)\n"
+    "- specificity: Que tan especifica es la solicitud (vague, specific, explicit)\n"
+    "- locations: Lista de lugares o destinos mencionados (arreglo vacio si no hay)\n"
+    "- niche_term_used: Si el usuario uso un termino especifico o de nicho como \"sendero\", \"mirador\", \"pizza\", \"sushi\" (true/false)\n"
+    "- topic: Subtema o contexto especifico del turno\n"
+    "\n"
+    "Responde SOLO con JSON valido en este formato exacto, sin texto adicional:\n"
+    "{\n"
+    '  "turn_type": "replace_step",\n'
+    '  "topic": "replace_step",\n'
+    '  "primary_intent": "general",\n'
+    '  "specificity": "vague",\n'
+    '  "locations": [],\n'
+    '  "niche_term_used": false\n'
+    "}"
+)
+
+
+def get_classifier_llm_client() -> AsyncOpenAI | None:
+    if not settings.deepseek_api_key:
+        logger.info("No DEEPSEEK_API_KEY configured — LLM classifier disabled")
+        return None
+    return AsyncOpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+    )
+
+
+def _build_classification_messages(
+    message: str,
+    normalized: str,
+    session_context: dict | None = None,
+) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": _CLASSIFICATION_PROMPT}]
+
+    context_lines: list[str] = []
+    if session_context and session_context.get("previous_messages"):
+        for msg in session_context["previous_messages"][-6:]:
+            role_label = "Usuario" if msg["role"] == "user" else "Asistente"
+            context_lines.append(f"{role_label}: {msg['content']}")
+
+    user_content = f"Mensaje del usuario: {message}"
+    if context_lines:
+        user_content = (
+            f"Contexto de la conversacion (ultimos turnos):\n"
+            f"{chr(10).join(context_lines)}\n\n"
+            f"{user_content}"
+        )
+
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
+async def classify_turn_llm(
+    message: str,
+    normalized: str,
+    session_context: dict | None = None,
+    llm_client: AsyncOpenAI | None = None,
+) -> dict | None:
+    if llm_client is None:
+        return None
+
+    try:
+        response = await llm_client.chat.completions.create(
+            model="deepseek-chat",
+            temperature=0,
+            max_tokens=200,
+            timeout=5,
+            messages=_build_classification_messages(message, normalized, session_context),
+        )
+        content = response.choices[0].message.content
+        if not content:
+            logger.warning("LLM classifier returned empty content")
+            return None
+
+        content = content.strip()
+        if content.startswith("``"):
+            content = content.split("\n", 1)[-1]
+            fence = "``" + "`" if content.endswith("``" + "`") else "```"
+            content = content.rsplit(fence, 1)[0].strip()
+
+        result = json.loads(content)
+        result["confidence"] = "llm_based"
+        logger.info("LLM classification: turn_type=%s topic=%s primary_intent=%s", result.get("turn_type"), result.get("topic"), result.get("primary_intent"))
+        return result
+    except Exception as exc:
+        logger.warning("LLM classifier failed: %s", exc)
+        return None
 
 
 def extract_itinerary_step_context(message: str) -> dict[str, UUID] | None:
@@ -106,12 +231,24 @@ def _detect_refinement_topic(normalized: str) -> str:
     return "preferences"
 
 
-def classify_turn(
+async def classify_turn(
     message: str,
     previous_intent: dict[str, Any] | None = None,
     previous_preferences: dict[str, Any] | None = None,
+    llm_client: AsyncOpenAI | None = None,
+    session_context: dict | None = None,
 ) -> dict[str, Any]:
     normalized = normalize_message(message)
+
+    llm_result = await classify_turn_llm(message, normalized, session_context, llm_client)
+    if llm_result is not None:
+        return {
+            "turn_type": llm_result.get("turn_type", "general_chat"),
+            "topic": llm_result.get("topic", "general"),
+            "confidence": "llm_based",
+        }
+
+    logger.info("Rule-based classify_turn fallback for: %.80r", message)
 
     if extract_replace_selection(message, previous_preferences) is not None:
         return {"turn_type": "replace_step", "topic": "replace_step", "confidence": "high_rule_based"}
@@ -144,8 +281,29 @@ def classify_turn(
     return {"turn_type": "general_chat", "topic": "general", "confidence": "low_rule_based"}
 
 
-def analyze_intent(message: str, previous_intent: dict[str, Any] | None = None) -> dict[str, Any]:
+async def analyze_intent(
+    message: str,
+    previous_intent: dict[str, Any] | None = None,
+    llm_client: AsyncOpenAI | None = None,
+    session_context: dict | None = None,
+) -> dict[str, Any]:
     normalized = normalize_message(message)
+
+    llm_result = await classify_turn_llm(message, normalized, session_context, llm_client)
+    if llm_result is not None:
+        llm_primary = llm_result.get("primary_intent", "general")
+        llm_specificity = llm_result.get("specificity", "vague")
+        llm_locations = llm_result.get("locations", [])
+        return {
+            "intents": [llm_primary],
+            "primary_intent": llm_primary,
+            "locations": llm_locations,
+            "specificity": llm_specificity,
+            "confidence": "llm_based",
+        }
+
+    logger.info("Rule-based analyze_intent fallback for: %.80r", message)
+
     intents: list[str] = []
     if any(term in normalized for term in FOOD_TERMS):
         intents.append("gastronomia")

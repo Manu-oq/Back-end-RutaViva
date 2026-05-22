@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 
 from openai import AsyncOpenAI
 
@@ -26,6 +27,7 @@ class ItineraryGenerator:
         context_pois: list[POIResponse],
         weather_forecast: str,
         schedule_guidance: str,
+        stream_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
         context_payload = [poi.model_dump(mode="json") for poi in context_pois]
 
@@ -98,7 +100,7 @@ Reglas obligatorias:
             f"POIs de contexto (usa solo estos lugares):\n{json.dumps(context_payload, ensure_ascii=False)}"
         )
 
-        response = await self.client.chat.completions.create(
+        kwargs = dict(
             model=self.model,
             temperature=0.2,
             response_format={"type": "json_object"},
@@ -109,7 +111,19 @@ Reglas obligatorias:
             ],
         )
 
-        content = response.choices[0].message.content
+        if stream_callback is not None:
+            kwargs["stream"] = True
+            stream = await self.client.chat.completions.create(**kwargs)
+            content = ""
+            async for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    content += token
+                    await stream_callback(token)
+        else:
+            response = await self.client.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content
+
         if not content:
             raise RuntimeError("DeepSeek returned an empty itinerary response.")
 

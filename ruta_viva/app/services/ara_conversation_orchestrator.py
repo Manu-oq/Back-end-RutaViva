@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import HTTPException, status
@@ -47,6 +50,7 @@ from app.services.ara_turn_classifier import (
     extract_candidate_selection,
     extract_itinerary_step_context,
     extract_replace_selection,
+    get_classifier_llm_client,
 )
 from app.services.embedding_service import EmbeddingCache, OpenAIEmbeddingService, get_embedding_service
 from app.services.itinerary_generation_service import (
@@ -81,6 +85,15 @@ from app.services.weather_service import get_forecast
 ara_repository = AraRepository()
 poi_repository = POIRepository()
 itinerary_repository = ItineraryRepository()
+
+_classifier_llm_client: Any | None = None
+
+
+def _ensure_classifier_llm_client() -> Any | None:
+    global _classifier_llm_client
+    if _classifier_llm_client is None:
+        _classifier_llm_client = get_classifier_llm_client()
+    return _classifier_llm_client
 
 
 def _candidate_uuid_list(candidate_poi_ids: list[UUID] | list[str] | None) -> list[UUID]:
@@ -197,6 +210,11 @@ async def maybe_diversify_candidate_pois(
 
     if "gastronomia" not in completed_dimensions and not surprise and not category_already_covered:
         return candidate_pois
+
+    logger.info(
+        "Diversification triggered primary_intent=%s completed=%s surprise=%s",
+        primary_intent, completed_dimensions, surprise,
+    )
     diversification_query = (
         f"{base_query}. Para equilibrar el viaje, buscar también naturaleza, miradores, cultura, "
         "actividades suaves y descanso. No limitar la conversación solo a restaurantes o comida."
@@ -214,7 +232,12 @@ async def maybe_diversify_candidate_pois(
         embedding_cache=embedding_cache,
     )
     diversified = filter_blacklisted_context_pois(diversification_query, diversified)
-    return merge_unique_context_pois(candidate_pois, diversified, max_pois=12)
+    merged = merge_unique_context_pois(candidate_pois, diversified, max_pois=12)
+    logger.info(
+        "Diversification result: original=%d diversified=%d merged=%d",
+        len(candidate_pois), len(diversified), len(merged),
+    )
+    return merged
 
 
 async def build_step_replacement_context(
@@ -256,6 +279,10 @@ async def search_step_replacement_alternatives(
         f"Buscar alternativa turística real para reemplazar este POI: {current_poi.name}. "
         f"Descripción actual: {current_poi.description}. Preferencias del usuario: {message}"
     )
+    logger.debug(
+        "Searching replacement alternatives for poi=%s lat=%s lon=%s radius=%s",
+        current_poi.name, search_lat, search_lon, search_radius,
+    )
     alternatives = await search_candidate_pois(
         db,
         poi_repository,
@@ -268,7 +295,9 @@ async def search_step_replacement_alternatives(
         limit=15,
     )
     alternatives = filter_blacklisted_context_pois(message, alternatives)
-    return [poi for poi in alternatives if poi.id != current_poi.id][:5]
+    result = [poi for poi in alternatives if poi.id != current_poi.id][:5]
+    logger.info("Replacement alternatives found: %d for poi=%s", len(result), current_poi.name)
+    return result
 
 
 def extract_replacement_request_from_metadata(metadata: dict | None) -> dict[str, UUID] | None:
@@ -281,6 +310,7 @@ def extract_replacement_request_from_metadata(metadata: dict | None) -> dict[str
             "step_id": UUID(str(metadata["step_id"])),
         }
     except (KeyError, TypeError, ValueError) as exc:
+        logger.warning("Invalid replacement metadata: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="metadata.itinerary_id and metadata.step_id must be valid UUIDs for change_itinerary_step.",
@@ -302,6 +332,7 @@ async def load_active_itinerary_from_preferences(
     try:
         itinerary_id = UUID(str(itinerary_id_value))
     except (TypeError, ValueError):
+        logger.debug("Invalid itinerary_id in preferences: %s", itinerary_id_value)
         return None
     return await itinerary_repository.get_itinerary_by_id(db, itinerary_id, current_user.id)
 
@@ -312,6 +343,7 @@ def quick_replies_from_payload(payload: list[dict]) -> list[AraQuickReply]:
         try:
             replies.append(AraQuickReply.model_validate(item))
         except Exception:
+            logger.debug("Skipping invalid quick reply payload: %s", item)
             continue
     return replies
 
@@ -322,9 +354,15 @@ async def create_session(
     payload: AraSessionCreate,
     embedding_service: OpenAIEmbeddingService,
 ) -> AraSessionResponse:
+    logger.info(
+        "Creating session user_id=%s initial_query=%.100r lat=%s lon=%s radius=%s",
+        current_user.id, payload.initial_message, payload.lat, payload.lon, payload.radius,
+    )
     embedding_cache = EmbeddingCache(embedding_service)
-    intent = analyze_intent(payload.initial_message)
+    intent = await analyze_intent(payload.initial_message, llm_client=_ensure_classifier_llm_client())
+    logger.debug("Session intent analysis result: %s", intent)
     preferences = merge_preferences(payload.initial_message)
+    logger.debug("Initial preferences after merge: %s", preferences)
     start_date, end_date = normalize_dates(payload.start_date, payload.end_date)
     preferences = update_trip_draft_from_message(
         payload.initial_message,
@@ -335,13 +373,20 @@ async def create_session(
         payload_lat=payload.lat,
         payload_lon=payload.lon,
     )
+    logger.debug("Preferences after trip draft update: %s", preferences)
     effective_lat, effective_lon, effective_radius, search_center_metadata = await resolve_effective_search_context(
         payload.initial_message,
         fallback_lat=payload.lat,
         fallback_lon=payload.lon,
         fallback_radius=payload.radius,
     )
+    logger.info(
+        "Search context resolved lat=%s lon=%s radius=%s source=%s label=%s",
+        effective_lat, effective_lon, effective_radius,
+        search_center_metadata.get("source"), search_center_metadata.get("label"),
+    )
     strict_destination = is_strict_destination_context(search_center_metadata, payload.initial_message)
+    logger.debug("Strict destination context: %s", strict_destination)
     existing_search_center = (preferences.get("trip_draft") or {}).get("search_center") or {}
     if search_center_metadata.get("source") != "payload" or not existing_search_center.get("label"):
         preferences = apply_search_center(
@@ -351,11 +396,13 @@ async def create_session(
             source=str(search_center_metadata.get("source") or "payload"),
             label=search_center_metadata.get("label"),
         )
+        logger.debug("Search center applied to preferences: %s", preferences.get("trip_draft", {}).get("search_center"))
     replacement_request = (
         extract_replacement_request_from_metadata(payload.metadata)
         or extract_itinerary_step_context(payload.initial_message)
     )
     if replacement_request is not None:
+        logger.info("Replacement request detected itinerary_id=%s step_id=%s", replacement_request.get("itinerary_id"), replacement_request.get("step_id"))
         context = await build_step_replacement_context(
             db,
             current_user,
@@ -363,9 +410,11 @@ async def create_session(
             step_id=replacement_request["step_id"],
         )
         if context is None:
+            logger.warning("Replacement context not found for step_id=%s", replacement_request.get("step_id"))
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary or step not found.")
 
         _itinerary_title, _step, current_poi = context
+        logger.info("Searching replacement alternatives for poi=%s", current_poi.name)
         candidate_pois = await search_step_replacement_alternatives(
             db,
             current_user,
@@ -419,8 +468,13 @@ async def create_session(
                 },
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Session created (replacement) session_id=%s user_id=%s status=%s",
+                session.id, current_user.id, session.status,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to create session (replacement path) user_id=%s", current_user.id)
             raise
 
         return AraSessionResponse(
@@ -438,6 +492,7 @@ async def create_session(
             generated_itinerary_id=session.generated_itinerary_id,
         )
 
+    logger.debug("Searching candidate POIs for session creation query=%.100r", payload.initial_message)
     candidate_pois = await search_candidate_pois(
         db,
         poi_repository,
@@ -449,6 +504,7 @@ async def create_session(
         radius=effective_radius,
         embedding_cache=embedding_cache,
     )
+    logger.info("POI search returned %d candidates", len(candidate_pois))
     candidate_pois = filter_blacklisted_context_pois(payload.initial_message, candidate_pois)
     candidate_pois = await maybe_diversify_candidate_pois(
         db,
@@ -463,12 +519,14 @@ async def create_session(
         radius=effective_radius,
         embedding_cache=embedding_cache,
     )
+    logger.debug("After diversification: %d candidates", len(candidate_pois))
     candidate_pois = finalize_candidate_pois(
         candidate_pois,
         intent=intent,
         preferences=preferences,
         query=payload.initial_message,
     )
+    logger.debug("After finalize: %d candidates", len(candidate_pois))
     preferences = remember_destination_scope(
         preferences,
         strict_destination=strict_destination,
@@ -527,8 +585,13 @@ async def create_session(
             },
         )
         await ara_repository.commit_or_rollback(db)
+        logger.info(
+            "Session created session_id=%s user_id=%s status=%s intent=%s",
+            session.id, current_user.id, session.status, intent.get("primary_intent"),
+        )
     except Exception:
         await db.rollback()
+        logger.exception("Failed to create session (normal path) user_id=%s", current_user.id)
         raise
 
     return AraSessionResponse(
@@ -558,16 +621,23 @@ async def handle_message(
 
     session = await ara_repository.get_session(db, session_id, current_user.id)
     if session is None:
+        logger.warning("Session not found session_id=%s user_id=%s", session_id, current_user.id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ara session not found.")
 
     previous_intent = session.intent_data or {}
     previous_preferences = session.preferences_data or {}
+    turn_count = int(previous_preferences.get("turn_count", 0)) + 1
+    logger.info(
+        "Message received session_id=%s user_id=%s turn=%d message=%.100r",
+        session_id, current_user.id, turn_count, payload.message,
+    )
 
     replace_selection = extract_replace_selection(payload.message, previous_preferences)
     if replace_selection is not None:
         replacement_context = previous_preferences.get("replacement_context") or {}
         itinerary_id_value = replacement_context.get("itinerary_id")
         if itinerary_id_value is None:
+            logger.warning("Missing itinerary_id for replacement session_id=%s", session_id)
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Ara needs itinerary_id context before replacing a step.",
@@ -575,6 +645,7 @@ async def handle_message(
 
         chosen_poi = await poi_repository.get_poi_by_id(db, replace_selection["poi_id"])
         if chosen_poi is None:
+            logger.warning("Replacement POI not found poi_id=%s", replace_selection["poi_id"])
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Replacement POI not found.")
 
         current_itinerary = await itinerary_repository.get_itinerary_by_id(
@@ -648,8 +719,13 @@ async def handle_message(
                 },
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Step replaced session_id=%s step_id=%s new_poi=%s",
+                session_id, replace_selection["step_id"], chosen_poi.name,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to replace step session_id=%s", session_id)
             raise
 
         assistant_response = session_message_response(assistant_message)
@@ -665,17 +741,36 @@ async def handle_message(
             generated_itinerary_id=session.generated_itinerary_id,
         )
 
-    turn_classification = classify_turn(payload.message, previous_intent, previous_preferences)
+    llm_client = _ensure_classifier_llm_client()
+    session_context = {
+        "previous_messages": [
+            {"role": m.role, "content": m.content}
+            for m in (session.messages or [])[-6:]
+        ],
+    } if session.messages else None
+
+    turn_classification = await classify_turn(
+        payload.message, previous_intent, previous_preferences,
+        llm_client=llm_client, session_context=session_context,
+    )
+    logger.info(
+        "Turn classified session_id=%s turn=%d turn_type=%s",
+        session_id, turn_count, turn_classification.get("turn_type"),
+    )
 
     if turn_classification["turn_type"] == "candidate_selection":
         selected_poi_id = extract_candidate_selection(payload.message)
         if selected_poi_id is None:
+            logger.warning("Invalid candidate selection session_id=%s message=%.100r", session_id, payload.message)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid candidate selection.")
         selected_poi = await poi_repository.get_poi_by_id(db, selected_poi_id)
         if selected_poi is None:
+            logger.warning("Selected POI not found poi_id=%s", selected_poi_id)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selected POI not found.")
 
-        intent = analyze_intent(f"Quiero ir a {selected_poi.name}", previous_intent)
+        logger.info("Candidate selected session_id=%s poi=%s", session_id, selected_poi.name)
+        intent = await analyze_intent(f"Quiero ir a {selected_poi.name}", previous_intent, llm_client=llm_client)
+        logger.debug("Intent after selection: %s", intent)
         preferences = merge_preferences(
             f"Quiero ir a {selected_poi.name}",
             previous_preferences,
@@ -690,6 +785,7 @@ async def handle_message(
             payload_lon=session.lon,
         )
         preferences = mark_selected_poi(preferences, selected_poi)
+        logger.debug("Preferences after marking selected POI: %s", preferences)
         remaining_candidate_ids = [
             poi_id
             for poi_id in _candidate_uuid_list(session.candidate_poi_ids)
@@ -737,8 +833,13 @@ async def handle_message(
                 },
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Candidate selection committed session_id=%s turn=%d status=%s",
+                session_id, turn_count, session.status,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to process candidate selection session_id=%s", session_id)
             raise
 
         return AraSessionResponse(
@@ -754,8 +855,11 @@ async def handle_message(
         )
 
     if turn_classification["turn_type"] == "reset_or_new_trip":
-        intent = analyze_intent(payload.message)
+        logger.info("Reset/new trip requested session_id=%s turn=%d", session_id, turn_count)
+        intent = await analyze_intent(payload.message, llm_client=llm_client)
+        logger.debug("Intent after reset: %s", intent)
         preferences = reset_trip_preferences(payload.message)
+        logger.debug("Preferences after reset: %s", preferences)
         start_date, end_date = normalize_dates(session.start_date, session.end_date)
         preferences = update_trip_draft_from_message(
             payload.message,
@@ -764,13 +868,16 @@ async def handle_message(
             start_date=start_date,
             end_date=end_date,
             payload_lat=session.lat,
-            payload_lon=session.lon,
         )
         effective_lat, effective_lon, effective_radius, search_center_metadata = await resolve_effective_search_context(
             payload.message,
             fallback_lat=session.lat,
             fallback_lon=session.lon,
             fallback_radius=session.radius,
+        )
+        logger.info(
+            "Reset search context lat=%s lon=%s radius=%s source=%s",
+            effective_lat, effective_lon, effective_radius, search_center_metadata.get("source"),
         )
         strict_destination = is_strict_destination_context(search_center_metadata, payload.message)
         preferences = apply_search_center(
@@ -783,6 +890,7 @@ async def handle_message(
         session.lat = effective_lat
         session.lon = effective_lon
         session.radius = effective_radius
+        logger.debug("Searching candidate POIs for reset query=%.100r", payload.message)
         candidate_pois = await search_candidate_pois(
             db,
             poi_repository,
@@ -795,6 +903,7 @@ async def handle_message(
             limit=12,
             embedding_cache=embedding_cache,
         )
+        logger.info("Reset POI search returned %d candidates", len(candidate_pois))
         candidate_pois = filter_blacklisted_context_pois(payload.message, candidate_pois)
         candidate_pois = await maybe_diversify_candidate_pois(
             db,
@@ -809,12 +918,14 @@ async def handle_message(
             radius=effective_radius,
             embedding_cache=embedding_cache,
         )
+        logger.debug("After diversification for reset: %d candidates", len(candidate_pois))
         candidate_pois = finalize_candidate_pois(
             candidate_pois,
             intent=intent,
             preferences=preferences,
             query=payload.message,
         )
+        logger.debug("After finalize for reset: %d candidates", len(candidate_pois))
         preferences = remember_destination_scope(
             preferences,
             strict_destination=strict_destination,
@@ -862,8 +973,13 @@ async def handle_message(
                 },
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Reset committed session_id=%s turn=%d status=%s candidates=%d",
+                session_id, turn_count, session.status, len(candidate_pois),
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to process reset/new trip session_id=%s", session_id)
             raise
 
         return AraSessionResponse(
@@ -879,12 +995,14 @@ async def handle_message(
         )
 
     if turn_classification["turn_type"] == "generate_request":
-        intent = previous_intent or analyze_intent(session.initial_query)
+        logger.info("Generate request received session_id=%s turn=%d", session_id, turn_count)
+        intent = previous_intent if previous_intent else await analyze_intent(session.initial_query, llm_client=llm_client)
         preferences = merge_preferences(
             payload.message,
             previous_preferences,
             turn_classification=turn_classification,
         )
+        logger.debug("Preferences merged for generate_request: %s", preferences)
         start_date, end_date = normalize_dates(session.start_date, session.end_date)
         preferences = update_trip_draft_from_message(
             payload.message,
@@ -897,6 +1015,7 @@ async def handle_message(
         )
         preferences["auto_generate_requested"] = True
         preferences["conversation_mode"] = "ready_to_generate"
+        logger.debug("Trip draft updated for generate_request")
         quick_replies = [
             AraQuickReply(
                 id="generar_itinerario_async",
@@ -925,8 +1044,13 @@ async def handle_message(
                 metadata=turn_classification,
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Generate request committed session_id=%s turn=%d status=ready_to_generate",
+                session_id, turn_count,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to process generate request session_id=%s", session_id)
             raise
 
         return AraSessionResponse(
@@ -942,6 +1066,7 @@ async def handle_message(
         )
 
     if turn_classification["turn_type"] == "free_question":
+        logger.info("Free question received session_id=%s turn=%d topic=%s", session_id, turn_count, turn_classification.get("topic"))
         preferences = dict(previous_preferences)
         preferences["turn_count"] = int(preferences.get("turn_count", 0)) + 1
         preferences["last_turn_type"] = "free_question"
@@ -949,12 +1074,15 @@ async def handle_message(
         preferences["conversation_mode"] = "answering_question"
         if session.generated_itinerary_id is not None and not preferences.get("active_itinerary_id"):
             preferences["active_itinerary_id"] = str(session.generated_itinerary_id)
+            logger.debug("Active itinerary set from generated_itinerary_id=%s", session.generated_itinerary_id)
 
         active_itinerary = await load_active_itinerary_from_preferences(db, current_user, preferences)
         if active_itinerary is not None:
             step_poi_ids = [s.poi_id for s in active_itinerary.steps]
             candidate_pois = await poi_repository.get_pois_by_ids(db, step_poi_ids) if step_poi_ids else []
+            logger.debug("Loaded %d POIs from active itinerary for free question", len(candidate_pois))
         else:
+            logger.debug("Searching POIs for free question query=%.100r", payload.message)
             candidate_pois = await search_candidate_pois(
                 db,
                 poi_repository,
@@ -969,6 +1097,7 @@ async def handle_message(
             )
             candidate_pois = filter_blacklisted_context_pois(payload.message, candidate_pois)
 
+        logger.debug("Calling answer_free_question session_id=%s", session_id)
         chat_answer = await ara_chat_service.answer_free_question(
             user_message=payload.message,
             topic=str(turn_classification.get("topic") or "general"),
@@ -976,7 +1105,9 @@ async def handle_message(
             candidate_pois=candidate_pois,
             active_itinerary=active_itinerary,
         )
+        logger.debug("Free question answered used_context=%s evidence_level=%s", chat_answer.get("used_context"), chat_answer.get("evidence_level"))
         preferences = apply_memory_patch(preferences, chat_answer.get("memory_patch"))
+        logger.debug("Memory patch applied session_id=%s", session_id)
         quick_replies = quick_replies_from_payload(chat_answer.get("quick_replies") or [])
         metadata = {
             **turn_classification,
@@ -1002,8 +1133,13 @@ async def handle_message(
                 metadata=metadata,
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Free question committed session_id=%s turn=%d status=%s",
+                session_id, turn_count, session.status,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to process free question session_id=%s", session_id)
             raise
 
         return AraSessionResponse(
@@ -1019,7 +1155,8 @@ async def handle_message(
         )
 
     replacement_request = extract_itinerary_step_context(payload.message)
-    intent = analyze_intent(payload.message, previous_intent)
+    intent = await analyze_intent(payload.message, previous_intent, llm_client=llm_client)
+    logger.debug("Intent for general turn session_id=%s: %s", session_id, intent)
     preferences = merge_preferences(
         payload.message,
         previous_preferences,
@@ -1035,11 +1172,16 @@ async def handle_message(
         payload_lat=session.lat,
         payload_lon=session.lon,
     )
+    logger.debug("Trip draft updated for general turn session_id=%s", session_id)
     effective_lat, effective_lon, effective_radius, search_center_metadata = await resolve_effective_search_context(
         payload.message,
         fallback_lat=session.lat,
         fallback_lon=session.lon,
         fallback_radius=session.radius,
+    )
+    logger.info(
+        "Search context for general turn session_id=%s lat=%s lon=%s radius=%s source=%s",
+        session_id, effective_lat, effective_lon, effective_radius, search_center_metadata.get("source"),
     )
     existing_search_center = (preferences.get("trip_draft") or {}).get("search_center") or {}
     if (
@@ -1053,6 +1195,7 @@ async def handle_message(
             "source": "expanded_destination",
             "label": existing_search_center.get("label"),
         }
+        logger.info("Expanded destination scope session_id=%s radius=%d", session_id, effective_radius)
     inherited_strict, inherited_metadata = inherits_strict_destination_context(
         preferences,
         search_center_metadata,
@@ -1060,10 +1203,12 @@ async def handle_message(
     )
     if inherited_strict:
         search_center_metadata = inherited_metadata
+        logger.debug("Inherited strict destination context session_id=%s", session_id)
     strict_destination = inherited_strict or is_strict_destination_context(
         search_center_metadata,
         payload.message,
     )
+    logger.debug("Strict destination: %s session_id=%s", strict_destination, session_id)
     if search_center_metadata.get("source") != "payload" or not existing_search_center.get("label"):
         preferences = apply_search_center(
             preferences,
@@ -1077,6 +1222,10 @@ async def handle_message(
     session.radius = effective_radius
 
     if replacement_request is not None:
+        logger.info(
+            "Replacement request in general turn session_id=%s itinerary_id=%s step_id=%s",
+            session_id, replacement_request.get("itinerary_id"), replacement_request.get("step_id"),
+        )
         context = await build_step_replacement_context(
             db,
             current_user,
@@ -1084,9 +1233,11 @@ async def handle_message(
             step_id=replacement_request["step_id"],
         )
         if context is None:
+            logger.warning("Replacement context not found session_id=%s", session_id)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary or step not found.")
 
         _itinerary_title, step, current_poi = context
+        logger.info("Searching replacement alternatives for poi=%s session_id=%s", current_poi.name, session_id)
         candidate_pois = await search_step_replacement_alternatives(
             db,
             current_user,
@@ -1128,8 +1279,13 @@ async def handle_message(
                 },
             )
             await ara_repository.commit_or_rollback(db)
+            logger.info(
+                "Step replacement suggested session_id=%s turn=%d candidates=%d",
+                session_id, turn_count, len(candidate_pois),
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Failed to suggest step replacement session_id=%s", session_id)
             raise
 
         return AraSessionResponse(
@@ -1145,6 +1301,7 @@ async def handle_message(
         )
 
     query_for_search = f"{session.initial_query}. {payload.message}"
+    logger.debug("Searching POIs for general turn session_id=%s query=%.100r", session_id, query_for_search)
     candidate_pois = await search_candidate_pois(
         db,
         poi_repository,
@@ -1158,6 +1315,7 @@ async def handle_message(
     )
     candidate_pois = filter_blacklisted_context_pois(query_for_search, candidate_pois)
     if not candidate_pois and session.candidate_poi_ids:
+        logger.info("No POIs found via search, falling back to session candidate POIs session_id=%s", session_id)
         candidate_pois = await poi_repository.get_pois_by_ids(db, _candidate_uuid_list(session.candidate_poi_ids))
         if strict_destination:
             candidate_pois = filter_pois_to_search_center(
@@ -1167,6 +1325,7 @@ async def handle_message(
                 radius=effective_radius,
             )
         candidate_pois = filter_blacklisted_context_pois(query_for_search, candidate_pois)
+        logger.debug("Fallback returned %d candidates session_id=%s", len(candidate_pois), session_id)
     candidate_pois = await maybe_diversify_candidate_pois(
         db,
         current_user,
@@ -1180,12 +1339,14 @@ async def handle_message(
         radius=effective_radius,
         embedding_cache=embedding_cache,
     )
+    logger.debug("After diversification: %d candidates session_id=%s", len(candidate_pois), session_id)
     candidate_pois = finalize_candidate_pois(
         candidate_pois,
         intent=intent,
         preferences=preferences,
         query=query_for_search,
     )
+    logger.debug("After finalize: %d candidates session_id=%s", len(candidate_pois), session_id)
     preferences = remember_destination_scope(
         preferences,
         strict_destination=strict_destination,
@@ -1194,6 +1355,7 @@ async def handle_message(
     )
 
     status_value = "ready_to_generate" if preferences.get("auto_generate_requested") else "clarifying"
+    logger.debug("Status transition session_id=%s status=%s", session_id, status_value)
     quick_replies = build_quick_replies(intent, preferences)
     quick_replies = (
         destination_scope_quick_replies(search_center_metadata, local_result_count=len(candidate_pois))
@@ -1237,8 +1399,13 @@ async def handle_message(
             },
         )
         await ara_repository.commit_or_rollback(db)
+        logger.info(
+            "General turn committed session_id=%s turn=%d status=%s candidates=%d",
+            session_id, turn_count, session.status, len(candidate_pois),
+        )
     except Exception:
         await db.rollback()
+        logger.exception("Failed to process general turn session_id=%s", session_id)
         raise
 
     return AraSessionResponse(
@@ -1263,13 +1430,18 @@ async def generate_itinerary_from_session(
     llm_service: ItineraryGenerator,
 ) -> AraGenerateItineraryResponse:
     from app.api.deps import get_current_user
+    import time as _time
+    _phase_start = _time.monotonic()
+    logger.info("Itinerary generation START session_id=%s user_id=%s", session_id, current_user.id)
     if current_user.tourist_profile is None:
+        logger.warning("Non-tourist user tried to generate itinerary user_id=%s", current_user.id)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only tourist users can use Ara.")
 
     embedding_cache = EmbeddingCache(embedding_service)
 
     session = await ara_repository.get_session(db, session_id, current_user.id)
     if session is None:
+        logger.warning("Session not found for generation session_id=%s", session_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ara session not found.")
     preferences_data = session.preferences_data or {}
     trip_draft = preferences_data.get("trip_draft") or {}
@@ -1281,6 +1453,7 @@ async def generate_itinerary_from_session(
         effective_lon = search_center.get("lon")
 
     if effective_lat is None or effective_lon is None:
+        logger.warning("Missing search center for generation session_id=%s", session_id)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Ara needs a destination/search center before generating an itinerary.",
@@ -1297,12 +1470,14 @@ async def generate_itinerary_from_session(
         session.intent_data,
         session.preferences_data,
     )
+    logger.debug("Refined query built session_id=%s query=%.100r", session_id, refined_query)
     search_query = refined_query
     if preferences_data.get("surprise_route_requested"):
         search_query += (
             "\nRuta sorpresa equilibrada: recuperar un pool diverso, no solo lugares gastronómicos. "
             "Incluir naturaleza, cultura, miradores, descanso, actividades suaves y gastronomía."
         )
+        logger.info("Surprise route activated session_id=%s", session_id)
     destination_scope = trip_draft.get("destination_scope") if isinstance(trip_draft, dict) else {}
     strict_destination = bool((destination_scope or {}).get("strict"))
 
@@ -1318,6 +1493,10 @@ async def generate_itinerary_from_session(
 
     num_days = trip_days(generation_payload)
     retrieval_limit = min(80, max(20, num_days * 12))
+    logger.info(
+        "Phase: query built session_id=%s days=%d retrieval_limit=%d lat=%s lon=%s",
+        session_id, num_days, retrieval_limit, generation_payload.lat, generation_payload.lon,
+    )
 
     session_context_pois = []
     if session.candidate_poi_ids:
@@ -1332,6 +1511,8 @@ async def generate_itinerary_from_session(
                 lon=generation_payload.lon,
                 radius=generation_payload.radius,
             )
+        logger.debug("Loaded %d session context POIs session_id=%s", len(session_context_pois), session_id)
+    logger.info("Phase: searching POIs with fallbacks session_id=%s", session_id)
     searched_context_pois = await search_generation_context_with_fallbacks(
         db,
         poi_repository,
@@ -1359,8 +1540,13 @@ async def generate_itinerary_from_session(
             radius=generation_payload.radius,
         )
     context_pois = prepare_context_pois(refined_query, context_pois, retrieval_limit)
+    logger.info("Phase: POI search complete session_id=%s total_pois=%d", session_id, len(context_pois))
     if not context_pois:
         scope_label = (destination_scope or {}).get("label")
+        logger.warning(
+            "No context POIs found for generation session_id=%s strict=%s label=%s",
+            session_id, strict_destination, scope_label,
+        )
         detail = (
             f"No encontré datos suficientes directamente en {scope_label}. "
             "Puedes ampliar la búsqueda a comunas cercanas o ajustar el tipo de lugares."
@@ -1384,6 +1570,7 @@ async def generate_itinerary_from_session(
     )
     schedule_guidance = build_schedule_guidance(generation_payload)
 
+    logger.info("Phase: fetching weather session_id=%s", session_id)
     try:
         weather_forecast = await get_forecast(
             generation_payload.lat,
@@ -1391,16 +1578,26 @@ async def generate_itinerary_from_session(
             start_date=start_date,
             end_date=end_date,
         )
+        logger.debug("Weather fetched session_id=%s", session_id)
     except ValueError as exc:
+        logger.error("Weather forecast failed (invalid data) session_id=%s: %s", session_id, exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
+        logger.error("Weather forecast HTTP error session_id=%s: %s", session_id, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Weather forecast provider failed while generating the itinerary.",
         ) from exc
 
+    _phase_weather = _time.monotonic()
+    logger.info(
+        "Phase: weather ready session_id=%s elapsed=%.2fs",
+        session_id, _phase_weather - _phase_start,
+    )
+    logger.info("Phase: calling LLM for itinerary generation session_id=%s", session_id)
     await ara_repository.update_session_context(db, session, status="generating")
     await ara_repository.commit_or_rollback(db)
+    logger.debug("Status updated to 'generating' session_id=%s", session_id)
 
     generated_raw = await llm_service.generate_itinerary(
         enriched_query,
@@ -1408,21 +1605,33 @@ async def generate_itinerary_from_session(
         weather_forecast,
         schedule_guidance,
     )
+    _phase_llm = _time.monotonic()
+    logger.info(
+        "Phase: LLM response received session_id=%s elapsed=%.2fs",
+        session_id, _phase_llm - _phase_weather,
+    )
     generated_itinerary = GeneratedItinerary.model_validate(generated_raw)
     generated_itinerary = normalize_generated_itinerary_times(generated_itinerary, generation_payload)
     generated_itinerary = repair_duplicate_poi_steps(generated_itinerary, context_pois, generation_payload)
     generated_itinerary = repair_schedule_and_category_issues(generated_itinerary, context_pois, generation_payload)
 
+    logger.info("Phase: validating LLM output session_id=%s steps=%d", session_id, len(generated_itinerary.steps))
     valid_poi_ids = {poi.id for poi in context_pois}
     invalid_poi_ids = [step.poi_id for step in generated_itinerary.steps if step.poi_id not in valid_poi_ids]
     if invalid_poi_ids:
+        logger.error(
+            "LLM returned POIs outside context session_id=%s invalid=%s",
+            session_id, [str(pid) for pid in invalid_poi_ids],
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM returned POIs outside Ara context.")
     if not generated_itinerary.steps:
+        logger.error("LLM returned no steps session_id=%s", session_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Ara did not return itinerary steps.")
 
     validate_generated_itinerary_rules(generated_itinerary, context_pois, generation_payload)
     generated_itinerary = sanitize_generated_itinerary_context(generated_itinerary)
 
+    logger.info("Phase: saving itinerary session_id=%s", session_id)
     itinerary = await itinerary_repository.create_generated_itinerary(
         db,
         tourist_id=current_user.id,
@@ -1430,6 +1639,7 @@ async def generate_itinerary_from_session(
         end_date=end_date,
         generated_itinerary=generated_itinerary,
     )
+    logger.info("Itinerary created session_id=%s itinerary_id=%s", session_id, itinerary.id)
 
     await db.refresh(session, ["preferences_data", "status", "candidate_poi_ids", "generated_itinerary_id"])
     preferences = dict(session.preferences_data or {})
@@ -1452,6 +1662,13 @@ async def generate_itinerary_from_session(
         metadata={"generated_itinerary_id": str(itinerary.id)},
     )
     await ara_repository.commit_or_rollback(db)
+    logger.debug("Preferences after generation session_id=%s: %s", session_id, preferences)
+
+    _phase_end = _time.monotonic()
+    logger.info(
+        "Itinerary generation COMPLETE session_id=%s itinerary_id=%s total_elapsed=%.2fs",
+        session_id, itinerary.id, _phase_end - _phase_start,
+    )
 
     return AraGenerateItineraryResponse(session_id=session_id, status="completed", itinerary=itinerary)
 
@@ -1471,10 +1688,17 @@ async def run_ara_itinerary_generation_job(
     tourist_id: UUID,
     payload: AraGenerateItineraryRequest | None,
 ) -> None:
+    import time as _time
+    _job_start = _time.monotonic()
+    logger.info("Background job START session_id=%s tourist_id=%s", session_id, tourist_id)
     async with AsyncSessionLocal() as db:
         current_user = await _get_user_for_background_job(db, tourist_id)
         session = await ara_repository.get_session(db, session_id, tourist_id)
         if current_user is None or session is None:
+            logger.warning(
+                "Background job: user or session not found session_id=%s tourist_id=%s",
+                session_id, tourist_id,
+            )
             return
 
         try:
@@ -1486,12 +1710,18 @@ async def run_ara_itinerary_generation_job(
                 embedding_service=get_embedding_service(),
                 llm_service=get_itinerary_generator(),
             )
+            logger.info(
+                "Background job COMPLETE session_id=%s total_elapsed=%.2fs",
+                session_id, _time.monotonic() - _job_start,
+            )
         except Exception:
             await db.rollback()
+            logger.exception("Background job FAILED session_id=%s", session_id)
             session = await ara_repository.get_session(db, session_id, tourist_id)
             if session is None:
                 return
             await ara_repository.update_session_context(db, session, status="failed")
+            logger.info("Session status set to 'failed' session_id=%s", session_id)
             await ara_repository.add_message(
                 db,
                 session.id,
