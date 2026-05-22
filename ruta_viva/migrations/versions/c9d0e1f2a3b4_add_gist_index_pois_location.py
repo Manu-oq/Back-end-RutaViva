@@ -18,10 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pois_location "
+        "CREATE INDEX IF NOT EXISTS idx_pois_location "
         "ON pois USING GIST (location)"
     )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_pois_location")
+    op.execute("DROP INDEX IF EXISTS idx_pois_location")
