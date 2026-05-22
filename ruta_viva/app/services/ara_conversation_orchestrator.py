@@ -36,16 +36,34 @@ from app.schemas.itinerary import GenerateItineraryRequest, GeneratedItinerary, 
 from app.services.ara_preference_merger import apply_memory_patch, merge_preferences, reset_trip_preferences
 from app.services.ara_response_builder import (
     build_assistant_message,
+    build_day_empty_warning_message,
+    build_day_greeting,
+    build_day_navigation_chips,
+    build_day_skip_warning_message,
     build_generate_request_message,
+    build_lodging_ask_if_needed_message,
+    build_lodging_ask_mode_message,
+    build_lodging_disclaimer_message,
+    build_lodging_mode_chips,
+    build_lodging_selected_message,
+    build_progress_summary,
     build_quick_replies,
     build_refined_query,
     build_replacement_message,
     build_replacement_quick_replies,
+    build_start_of_flow_chips,
+    dedupe_quick_replies,
 )
 from app.services.ara_trip_draft_builder import (
+    advance_day,
     apply_search_center,
     ensure_trip_draft,
+    get_current_day,
+    get_lodging_info,
+    has_lodging,
     mark_selected_poi,
+    set_lodging,
+    skip_day,
     update_trip_draft_from_message,
 )
 from app.services.ara_turn_classifier import (
@@ -637,7 +655,10 @@ async def create_session(
         search_center_metadata=search_center_metadata,
         local_result_count=len(candidate_pois),
     )
-    quick_replies = build_quick_replies(intent, preferences)
+    if payload.start_date and payload.end_date:
+        quick_replies = build_start_of_flow_chips()
+    else:
+        quick_replies = build_quick_replies(intent, preferences)
     quick_replies = (
         destination_scope_quick_replies(search_center_metadata, local_result_count=len(candidate_pois))
         + quick_replies
@@ -707,12 +728,11 @@ async def create_session(
         intent=_build_intent_info(intent, preferences),
         preferences=_build_preference_summary(preferences),
         candidate_pois=_build_candidate_pois(candidate_pois),
+        progress=build_progress_summary(preferences),
         generated_itinerary_id=session.generated_itinerary_id,
         active_itinerary_id=_extract_active_itinerary_id(preferences),
         destination_context=search_center_metadata,
     )
-
-
 
 
 async def _handle_replace_selection(
@@ -870,6 +890,8 @@ async def _handle_candidate_selection(
     ]
 
     quick_replies = build_quick_replies(intent, preferences)
+    day_nav = build_day_navigation_chips(preferences)
+    quick_replies = dedupe_quick_replies(quick_replies + day_nav)[:8]
     selected_role = ((preferences.get("trip_draft") or {}).get("selected_pois") or [{}])[-1].get("role")
     if selected_role == "lodging":
         assistant_text = AraMessages.get("selection_lodging", poi_name=selected_poi.name)
@@ -918,6 +940,7 @@ async def _handle_candidate_selection(
         intent=_build_intent_info(intent, preferences),
         preferences=_build_preference_summary(preferences),
         candidate_pois=[],
+        progress=build_progress_summary(preferences),
         generated_itinerary_id=session.generated_itinerary_id,
         active_itinerary_id=_extract_active_itinerary_id(preferences),
     )
@@ -1089,6 +1112,61 @@ async def _handle_generate_request(
     llm_client: Any,
 ) -> AraSessionResponse:
     logger.info("Generate request received session_id=%s turn=%d", session_id, turn_count)
+
+    if not has_lodging(previous_preferences):
+        assistant_text = AraMessages.get("que_arme_ara_food_pref")
+        quick_replies = [
+            AraQuickReply(id="sin_pref", label=AraMessages.get("cta_sin_preferencias"), value="Sin preferencias", type="generate"),
+            AraQuickReply(id="vegetariano", label="Vegetariano", value="Vegetariano", type="refinement"),
+            AraQuickReply(id="sin_picante", label="Sin picante", value="Sin picante", type="refinement"),
+        ]
+        intent = previous_intent if previous_intent else await analyze_intent(session.initial_query, llm_client=llm_client)
+        preferences = merge_preferences(
+            payload.message,
+            previous_preferences,
+            turn_classification=turn_classification,
+        )
+        start_date, end_date = normalize_dates(session.start_date, session.end_date)
+        preferences = update_trip_draft_from_message(
+            payload.message, preferences, intent,
+            start_date=start_date, end_date=end_date,
+            payload_lat=session.lat, payload_lon=session.lon,
+        )
+        preferences["conversation_mode"] = "collecting_food_pref"
+
+        try:
+            session = await _update_session_with_retry(
+                ara_repository, db, session, current_user.id,
+                status="clarifying",
+                intent_data=intent,
+                preferences_data=preferences,
+            )
+            user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+            assistant_message = await ara_repository.add_message(
+                db, session.id, "assistant", assistant_text,
+                quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+                metadata=turn_classification,
+            )
+            await ara_repository.commit_or_rollback(db)
+        except Exception:
+            await db.rollback()
+            logger.exception("Food preference collection failed session_id=%s", session_id)
+            raise
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=session_message_response(user_message),
+            assistant_message=session_message_response(assistant_message),
+            quick_replies=quick_replies,
+            intent=_build_intent_info(intent, preferences),
+            preferences=_build_preference_summary(preferences),
+            candidate_pois=[],
+            progress=build_progress_summary(preferences),
+            generated_itinerary_id=session.generated_itinerary_id,
+            active_itinerary_id=_extract_active_itinerary_id(preferences),
+        )
+
     intent = previous_intent if previous_intent else await analyze_intent(session.initial_query, llm_client=llm_client)
     preferences = merge_preferences(
         payload.message,
@@ -1154,6 +1232,7 @@ async def _handle_generate_request(
         intent=_build_intent_info(intent, preferences),
         preferences=_build_preference_summary(preferences),
         candidate_pois=[],
+        progress=build_progress_summary(preferences),
         generated_itinerary_id=session.generated_itinerary_id,
         active_itinerary_id=_extract_active_itinerary_id(preferences),
     )
@@ -1303,6 +1382,12 @@ async def _handle_replacement_request(
         lon=effective_lon,
         radius=effective_radius,
     )
+    cids = list(getattr(current_poi, "category_ids", []) or [])
+    category_labels = {1: "comida", 2: "naturaleza", 3: "cultura", 4: "alojamiento", 5: "descanso"}
+    category = category_labels.get(cids[0], "comida") if cids else "comida"
+    candidate_pois = [p for p in candidate_pois if cids and any(
+        cid in (getattr(p, "category_ids", []) or []) for cid in cids[:2]
+    )] if cids else candidate_pois
     preferences["replacement_context"] = {
         "itinerary_id": str(replacement_request["itinerary_id"]),
         "step_id": str(replacement_request["step_id"]),
@@ -1310,7 +1395,7 @@ async def _handle_replacement_request(
         "current_poi_name": current_poi.name,
     }
     quick_replies = build_replacement_quick_replies(candidate_pois, replacement_request["step_id"])
-    assistant_text = build_replacement_message(current_poi.name, candidate_pois)
+    assistant_text = AraMessages.get("replacement_same_category", category=category, name=current_poi.name)
 
     try:
         session = await _update_session_with_retry(
@@ -1354,6 +1439,263 @@ async def _handle_replacement_request(
         generated_itinerary_id=session.generated_itinerary_id,
         active_itinerary_id=_extract_active_itinerary_id(preferences),
     )
+
+
+def _build_refinement_quick_replies(preferences: dict[str, Any] | None = None) -> list[AraQuickReply]:
+    return build_quick_replies({}, preferences or {})
+
+
+async def _handle_skip_day(
+    db: AsyncSession,
+    session: Any,
+    current_user: User,
+    payload: AraMessageCreate,
+    previous_preferences: dict[str, Any],
+    previous_intent: dict[str, Any],
+    session_id: UUID,
+    turn_count: int,
+    turn_classification: dict[str, Any],
+    llm_client: Any,
+) -> AraSessionResponse:
+    logger.info("Skip day requested session_id=%s turn=%d", session_id, turn_count)
+    prefs = advance_day(previous_preferences)
+    draft = (prefs.get("trip_draft") or {})
+    current = get_current_day(prefs)
+
+    if not current:
+        assistant_text = AraMessages.get("day_empty_warning")
+        quick_replies = [AraQuickReply(id="que_arme_ara", label="Que lo arme Ara", value="Que lo arme Ara", type="generate")]
+    else:
+        day_label = current.get("day_label", "siguiente")
+        assistant_text = build_day_greeting(prefs)
+        quick_replies = build_day_navigation_chips(prefs)
+
+    try:
+        session = await _update_session_with_retry(
+            ara_repository, db, session, current_user.id,
+            preferences_data=prefs,
+        )
+        user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+        assistant_message = await ara_repository.add_message(
+            db, session.id, "assistant", assistant_text,
+            quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+            metadata=turn_classification,
+        )
+        await ara_repository.commit_or_rollback(db)
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=session_message_response(user_message),
+            assistant_message=session_message_response(assistant_message),
+            quick_replies=quick_replies,
+            intent=_build_intent_info({}),
+            preferences=_build_preference_summary(prefs),
+            candidate_pois=[],
+            progress=build_progress_summary(prefs),
+        )
+    except Exception:
+        await db.rollback()
+        logger.exception("Skip day failed session_id=%s", session_id)
+        raise
+
+
+async def _handle_lodging_request(
+    db: AsyncSession,
+    session: Any,
+    current_user: User,
+    payload: AraMessageCreate,
+    embedding_service: OpenAIEmbeddingService,
+    embedding_cache: Any,
+    previous_preferences: dict[str, Any],
+    previous_intent: dict[str, Any],
+    session_id: UUID,
+    turn_count: int,
+    turn_classification: dict[str, Any],
+    llm_client: Any,
+) -> AraSessionResponse:
+    logger.info("Lodging request session_id=%s turn=%d", session_id, turn_count)
+
+    if not has_lodging(previous_preferences):
+        ctx = await resolve_effective_search_context(
+            payload.message, session.lat, session.lon,
+        )
+        effective_lat = ctx.get("lat", session.lat)
+        effective_lon = ctx.get("lon", session.lon)
+        effective_radius = ctx.get("radius", session.radius or 5000)
+
+        candidate_pois = await search_candidate_pois(
+            db, current_user, embedding_service,
+            query=payload.message, lat=effective_lat, lon=effective_lon,
+            radius_meters=effective_radius, limit=12,
+            embedding_cache=embedding_cache,
+            poi_repository=poi_repository,
+        )
+        lodging_pois = [p for p in candidate_pois if 4 in (getattr(p, "category_ids", []) or [])]
+    else:
+        lodging_pois = []
+
+    if lodging_pois:
+        disclaimer = build_lodging_disclaimer_message()
+        assistant_text = f"{disclaimer}\n\n{build_lodging_ask_if_needed_message()}"
+    else:
+        assistant_text = AraMessages.get("no_results")
+
+    quick_replies: list[AraQuickReply] = []
+    if lodging_pois:
+        for poi in lodging_pois[:3]:
+            quick_replies.append(AraQuickReply(
+                id=str(poi.id),
+                label=poi.name[:28],
+                value=poi.name,
+                type="lodging",
+            ))
+    quick_replies.append(AraQuickReply(
+        id="que_arme_ara", label="Que lo arme Ara", value="Que lo arme Ara", type="generate",
+    ))
+
+    prefs = merge_preferences(payload.message, previous_preferences, turn_classification=turn_classification)
+
+    try:
+        session = await _update_session_with_retry(
+            ara_repository, db, session, current_user.id,
+            preferences_data=prefs,
+        )
+        user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+        assistant_message = await ara_repository.add_message(
+            db, session.id, "assistant", assistant_text,
+            quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+            metadata=turn_classification,
+        )
+        await ara_repository.commit_or_rollback(db)
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=session_message_response(user_message),
+            assistant_message=session_message_response(assistant_message),
+            quick_replies=quick_replies,
+            intent=_build_intent_info({}),
+            preferences=_build_preference_summary(prefs),
+            candidate_pois=_build_candidate_pois(lodging_pois),
+            progress=build_progress_summary(prefs),
+        )
+    except Exception:
+        await db.rollback()
+        logger.exception("Lodging request failed session_id=%s", session_id)
+        raise
+
+
+async def _handle_lodging_mode(
+    db: AsyncSession,
+    session: Any,
+    current_user: User,
+    payload: AraMessageCreate,
+    previous_preferences: dict[str, Any],
+    session_id: UUID,
+    turn_count: int,
+    turn_classification: dict[str, Any],
+) -> AraSessionResponse:
+    logger.info("Lodging mode session_id=%s turn=%d", session_id, turn_count)
+    normalized = payload.message.lower().strip()
+    lodging_info = get_lodging_info(previous_preferences)
+    lodging_name = lodging_info.get("name", "el alojamiento") if lodging_info else "el alojamiento"
+
+    if "todos los dias" in normalized or "todo el finde" in normalized or "finde completo" in normalized:
+        mode = "all_days"
+    else:
+        mode = "all_days"
+
+    prefs = set_lodging(previous_preferences, lodging_info.get("poi_id", ""), lodging_name, mode)
+    prefs["completed_dimensions"] = list(dict.fromkeys((previous_preferences.get("completed_dimensions") or []) + ["lodging"]))
+
+    current = get_current_day(prefs)
+    if current:
+        assistant_text = build_day_greeting(prefs)
+        quick_replies = build_day_navigation_chips(prefs)
+    else:
+        assistant_text = AraMessages.get("refine_general")
+        quick_replies = _build_refinement_quick_replies(prefs)
+
+    try:
+        session = await _update_session_with_retry(
+            ara_repository, db, session, current_user.id,
+            preferences_data=prefs,
+        )
+        user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+        assistant_message = await ara_repository.add_message(
+            db, session.id, "assistant", assistant_text,
+            quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+            metadata=turn_classification,
+        )
+        await ara_repository.commit_or_rollback(db)
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=session_message_response(user_message),
+            assistant_message=session_message_response(assistant_message),
+            quick_replies=quick_replies,
+            intent=_build_intent_info({}),
+            preferences=_build_preference_summary(prefs),
+            candidate_pois=[],
+            progress=build_progress_summary(prefs),
+        )
+    except Exception:
+        await db.rollback()
+        logger.exception("Lodging mode failed session_id=%s", session_id)
+        raise
+
+
+async def _handle_focus_day(
+    db: AsyncSession,
+    session: Any,
+    current_user: User,
+    payload: AraMessageCreate,
+    previous_preferences: dict[str, Any],
+    session_id: UUID,
+    turn_count: int,
+    turn_classification: dict[str, Any],
+) -> AraSessionResponse:
+    logger.info("Focus day session_id=%s turn=%d", session_id, turn_count)
+    prefs = advance_day(previous_preferences, target_day_index=None)
+    current = get_current_day(prefs)
+
+    if current:
+        assistant_text = build_day_greeting(prefs)
+        quick_replies = build_day_navigation_chips(prefs)
+    else:
+        assistant_text = AraMessages.get("day_empty_warning")
+        quick_replies = [AraQuickReply(id="que_arme_ara", label="Que lo arme Ara", value="Que lo arme Ara", type="generate")]
+
+    try:
+        session = await _update_session_with_retry(
+            ara_repository, db, session, current_user.id,
+            preferences_data=prefs,
+        )
+        user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+        assistant_message = await ara_repository.add_message(
+            db, session.id, "assistant", assistant_text,
+            quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+            metadata=turn_classification,
+        )
+        await ara_repository.commit_or_rollback(db)
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=session_message_response(user_message),
+            assistant_message=session_message_response(assistant_message),
+            quick_replies=quick_replies,
+            intent=_build_intent_info({}),
+            preferences=_build_preference_summary(prefs),
+            candidate_pois=[],
+            progress=build_progress_summary(prefs),
+        )
+    except Exception:
+        await db.rollback()
+        logger.exception("Focus day failed session_id=%s", session_id)
+        raise
 
 
 async def _handle_refinement(
@@ -1490,6 +1832,7 @@ async def _handle_refinement(
         intent=_build_intent_info(intent, preferences),
         preferences=_build_preference_summary(preferences),
         candidate_pois=_build_candidate_pois(candidate_pois),
+        progress=build_progress_summary(preferences),
         generated_itinerary_id=session.generated_itinerary_id,
         active_itinerary_id=_extract_active_itinerary_id(preferences),
         destination_context=search_center_metadata,
@@ -1584,6 +1927,31 @@ async def handle_message(
             db, session, current_user, payload, ara_chat_service,
             embedding_service, embedding_cache, previous_preferences,
             previous_intent, session_id, turn_count, turn_classification,
+        )
+
+    if turn_type == "skip_day":
+        return await _handle_skip_day(
+            db, session, current_user, payload, previous_preferences, previous_intent,
+            session_id, turn_count, turn_classification, llm_client,
+        )
+
+    if turn_type == "focus_day":
+        return await _handle_focus_day(
+            db, session, current_user, payload, previous_preferences,
+            session_id, turn_count, turn_classification,
+        )
+
+    if turn_type == "lodging_request":
+        return await _handle_lodging_request(
+            db, session, current_user, payload, embedding_service,
+            embedding_cache, previous_preferences, previous_intent,
+            session_id, turn_count, turn_classification, llm_client,
+        )
+
+    if turn_type == "lodging_mode":
+        return await _handle_lodging_mode(
+            db, session, current_user, payload, previous_preferences,
+            session_id, turn_count, turn_classification,
         )
 
     replacement_request = extract_itinerary_step_context(payload.message)
