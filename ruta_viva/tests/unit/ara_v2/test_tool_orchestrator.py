@@ -227,7 +227,7 @@ class TestSuggestReplacementTool:
             actualizaciones_memoria=[],
         )
 
-        with patch("app.services.ara_conversation_orchestrator.build_step_replacement_context", new=AsyncMock(return_value=None)):
+        with patch("app.services.ara_itinerary_generation.build_step_replacement_context", new=AsyncMock(return_value=None)):
             result = await orchestrator.execute(comprehension, session, user, db_session)
 
             assert result.status in ("replace", "error")

@@ -204,7 +204,7 @@ class ToolOrchestrator:
         comprehension: ComprehensionResult,
         session: AraSession,
     ) -> dict[str, Any]:
-        from app.services.ara_conversation_orchestrator import (
+        from app.services.ara_itinerary_generation import (
             build_step_replacement_context,
             search_step_replacement_alternatives,
         )

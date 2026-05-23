@@ -22,14 +22,15 @@ from app.schemas.ara import (
     AraSessionResponse,
 )
 from app.services.ara_conversation_orchestrator import (
+    create_session_v2,
+    handle_message_v2,
+)
+from app.services.ara_itinerary_generation import (
     ara_repository,
-    create_session,
     generate_itinerary_from_session,
-    handle_message,
     itinerary_repository,
     run_ara_itinerary_generation_job,
 )
-from app.services.ara_chat_service import AraChatService, get_ara_chat_service
 from app.services.ara_streaming_service import stream_itinerary_generation
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 from app.services.llm_service import ItineraryGenerator, get_itinerary_generator
@@ -47,10 +48,9 @@ async def create_ara_session(
     payload: AraSessionCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
 ) -> AraSessionResponse:
     _ensure_tourist(current_user)
-    return await create_session(db, current_user, payload, embedding_service)
+    return await create_session_v2(db, current_user, payload)
 
 
 @router.post("/sessions/{session_id}/messages", response_model=AraSessionResponse)
@@ -59,11 +59,9 @@ async def add_ara_message(
     payload: AraMessageCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
-    ara_chat_service: AraChatService = Depends(get_ara_chat_service),
 ) -> AraSessionResponse:
     _ensure_tourist(current_user)
-    return await handle_message(db, current_user, session_id, payload, embedding_service, ara_chat_service)
+    return await handle_message_v2(db, current_user, session_id, payload)
 
 
 @router.get("/sessions/{session_id}/messages", response_model=AraMessagesResponse)

@@ -396,6 +396,21 @@ class POIRepository(BaseRepository):
             updated["cover"] = image_url
         return updated
 
+    async def search_by_name(
+        self,
+        db: AsyncSession,
+        name: str,
+        limit: int = 5,
+    ) -> list[POI]:
+        stmt = (
+            select(POI)
+            .where(POI.name.ilike(f"%{name}%"))
+            .where(POI.verification_status != "flagged")
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+
     async def recalculate_confidence(self, db: AsyncSession, poi_id: UUID) -> float:
         poi = await db.get(POI, poi_id)
         if poi is None:

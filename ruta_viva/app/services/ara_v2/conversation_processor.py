@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ara_session import AraSession
 from app.models.conversation_memory import ConversationMemory
 from app.models.user import User
+from app.schemas.ara import AraMessageResponse, AraQuickReply, AraSessionResponse
 from app.schemas.ara_comprehension import ComprehensionResult
 from app.services.ara_v2.comprehender import get_comprensor
 from app.services.ara_v2.memory_service import get_memory_service
+from app.services.ara_v2.response_generator import get_response_generator
+from app.services.ara_v2.tool_orchestrator import get_tool_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,7 @@ class ConversationProcessor:
         session: AraSession,
         current_user: User,
         user_message: str,
-    ) -> ComprehensionResult:
+    ) -> AraSessionResponse:
         """Procesa un mensaje del usuario con memoria semantica.
 
         Flujo:
@@ -36,8 +39,9 @@ class ConversationProcessor:
         3. Llamar al Comprensor
         4. Guardar hechos nuevos en memoria
         5. Actualizar TouristProfile.interests_embedding si corresponde
-
-        Retorna ComprehensionResult para que el orquestador decida que herramienta ejecutar.
+        6. Ejecutar herramientas
+        7. Generar respuesta
+        8. Persistir mensajes y devolver respuesta
         """
         memory_service = get_memory_service()
         comprensor = get_comprensor()
@@ -115,7 +119,40 @@ class ConversationProcessor:
                 except Exception:
                     logger.warning("Failed to update profile embedding for tourist=%s", tourist_id)
 
-        return comprehension
+        # PASO 6: Ejecutar herramientas
+        orchestrator = get_tool_orchestrator()
+        tool_result = await orchestrator.execute(
+            comprehension=comprehension,
+            session=session,
+            user=current_user,
+            db=db,
+        )
+
+        # PASO 7: Generar respuesta
+        response_gen = get_response_generator()
+        response = await response_gen.generate_response(
+            comprehension=comprehension,
+            tool_result=tool_result,
+            session=session,
+        )
+
+        # PASO 8: Persistir mensajes y devolver respuesta
+        user_msg = await self._add_message(db, session, "user", user_message)
+        assistant_msg = await self._add_message(
+            db, session, "assistant",
+            response["text"],
+            quick_replies=[qr.model_dump(mode="json") for qr in response.get("quick_replies", [])],
+        )
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            user_message=self._to_message_response(user_msg),
+            assistant_message=self._to_message_response(assistant_msg),
+            quick_replies=response.get("quick_replies", []),
+            candidate_pois=self._build_candidate_pois(tool_result.candidate_pois),
+            weather=tool_result.weather_forecast,
+        )
 
     @staticmethod
     def _get_recent_messages(session: AraSession) -> list[dict[str, Any]]:
@@ -128,6 +165,62 @@ class ConversationProcessor:
             {"role": msg.role, "content": msg.content, "metadata": msg.message_metadata}
             for msg in recent
         ]
+
+
+    @staticmethod
+    async def _add_message(
+        db: AsyncSession,
+        session: AraSession,
+        role: str,
+        content: str,
+        quick_replies: list[dict] | None = None,
+    ) -> Any:
+        """Agrega un mensaje a la sesion."""
+        from app.models.ara_message import AraMessage
+        msg = AraMessage(
+            session_id=session.id,
+            role=role,
+            content=content,
+            quick_replies=quick_replies,
+        )
+        db.add(msg)
+        await db.flush()
+        return msg
+
+    @staticmethod
+    def _to_message_response(msg: Any) -> AraMessageResponse:
+        """Convierte AraMessage ORM a AraMessageResponse."""
+        from app.repositories.ara_repository import AraRepository
+        return AraRepository().to_message_response(msg)
+
+    @staticmethod
+    def _build_candidate_pois(candidate_pois: list[dict] | None) -> list:
+        """Convierte candidate_pois dicts a formato de respuesta."""
+        if not candidate_pois:
+            return []
+        from app.schemas.ara import AraCandidatePOI
+        result = []
+        for poi in candidate_pois:
+            try:
+                poi_id = poi.get("id")
+                if isinstance(poi_id, str):
+                    poi_id = UUID(poi_id)
+                elif poi_id is None:
+                    poi_id = uuid4()
+                result.append(AraCandidatePOI(
+                    id=poi_id,
+                    name=poi.get("name", ""),
+                    description=poi.get("description"),
+                    category_ids=poi.get("category_ids", []),
+                    latitude=poi.get("latitude"),
+                    longitude=poi.get("longitude"),
+                    image_url=poi.get("image_url"),
+                    distance_meters=poi.get("distance_meters"),
+                    poi_role=poi.get("poi_role"),
+                ))
+            except Exception:
+                pass
+        return result
 
 
 _processor: ConversationProcessor | None = None

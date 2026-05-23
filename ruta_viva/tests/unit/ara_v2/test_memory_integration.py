@@ -258,7 +258,9 @@ class TestConversationProcessorIntegration:
         )
 
         with patch("app.services.ara_v2.conversation_processor.get_comprensor") as mock_get_comprensor, \
-             patch("app.services.ara_v2.conversation_processor.get_memory_service") as mock_get_ms:
+             patch("app.services.ara_v2.conversation_processor.get_memory_service") as mock_get_ms, \
+             patch("app.services.ara_v2.conversation_processor.get_tool_orchestrator") as mock_get_orchestrator, \
+             patch("app.services.ara_v2.conversation_processor.get_response_generator") as mock_get_response_gen:
             mock_comprensor = MagicMock()
             mock_comprensor.comprehend = AsyncMock(return_value=mock_comprehension)
             mock_get_comprensor.return_value = mock_comprensor
@@ -269,11 +271,29 @@ class TestConversationProcessorIntegration:
             mock_ms.update_tourist_profile_embedding = AsyncMock(return_value=False)
             mock_get_ms.return_value = mock_ms
 
+            mock_tool_result = MagicMock()
+            mock_tool_result.candidate_pois = []
+            mock_tool_result.weather_forecast = None
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute = AsyncMock(return_value=mock_tool_result)
+            mock_get_orchestrator.return_value = mock_orchestrator
+
+            mock_response_gen = MagicMock()
+            mock_response_gen.generate_response = AsyncMock(return_value={
+                "text": "Test response",
+                "quick_replies": [],
+            })
+            mock_get_response_gen.return_value = mock_response_gen
+
             result = await processor.process_user_message(
                 db_session, session, user, "Quiero ir a Villarrica"
             )
 
-            assert result.intencion_principal == "search_pois"
+            assert result.session_id == session.id
+            assert result.status == "clarifying"
+            assert result.user_message is not None
+            assert result.assistant_message is not None
+            assert result.assistant_message.content == "Test response"
             mock_comprensor.comprehend.assert_called_once()
             call_kwargs = mock_comprensor.comprehend.call_args[1]
             assert "relevant_facts" in call_kwargs
