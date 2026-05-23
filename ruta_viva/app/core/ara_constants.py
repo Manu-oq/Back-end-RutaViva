@@ -100,6 +100,9 @@ GENERATE_TERMS = (
     "hazlo con lo que tenemos",
     "con lo que tenemos",
     "con lo acordado",
+    "que lo arme ara",
+    "que ara lo arme",
+    "que ara lo haga",
 )
 SURPRISE_ROUTE_TERMS = (
     "hazlo todo",

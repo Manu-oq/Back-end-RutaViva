@@ -396,19 +396,19 @@ def build_start_of_flow_chips() -> list[AraQuickReply]:
         AraQuickReply(
             id="empezar_alojamiento",
             label=AraMessages.get("cta_empezar_alojamiento"),
-            value="empecemos por alojamiento",
+            value="buscar alojamiento",
             type="navigation",
         ),
         AraQuickReply(
             id="empezar_actividades",
             label=AraMessages.get("cta_empezar_actividades"),
-            value="empecemos por actividades",
+            value="buscar actividades",
             type="navigation",
         ),
         AraQuickReply(
             id="que_arme_ara_start",
             label=AraMessages.get("cta_que_arme_ara"),
-            value=AraMessages.get("cta_que_arme_ara"),
+            value="que lo arme ara",
             type="generate",
         ),
     ]

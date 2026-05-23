@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GenerateItineraryRequest(BaseModel):
-    query: str = Field(max_length=500)
+    query: str = Field(max_length=5000)
     lat: float
     lon: float
     radius: float = Field(default=5000, gt=0)

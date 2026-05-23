@@ -882,6 +882,10 @@ async def _handle_candidate_selection(
         payload_lon=session.lon,
     )
     preferences = mark_selected_poi(preferences, selected_poi)
+    selected_role = ((preferences.get("trip_draft") or {}).get("selected_pois") or [{}])[-1].get("role")
+    if selected_role == "lodging":
+        lodging_name = selected_poi.name if hasattr(selected_poi, "name") else "el alojamiento"
+        preferences = set_lodging(preferences, str(selected_poi_id), lodging_name, "all_days")
     logger.debug("Preferences after marking selected POI: %s", preferences)
     remaining_candidate_ids = [
         poi_id
@@ -892,7 +896,9 @@ async def _handle_candidate_selection(
     quick_replies = build_quick_replies(intent, preferences)
     day_nav = build_day_navigation_chips(preferences)
     quick_replies = dedupe_quick_replies(quick_replies + day_nav)[:8]
-    selected_role = ((preferences.get("trip_draft") or {}).get("selected_pois") or [{}])[-1].get("role")
+    if selected_role == "lodging":
+        lodging_name = selected_poi.name if hasattr(selected_poi, "name") else "el alojamiento"
+        quick_replies = build_lodging_mode_chips(preferences, lodging_name)
     if selected_role == "lodging":
         assistant_text = AraMessages.get("selection_lodging", poi_name=selected_poi.name)
     elif selected_role == "meal":
@@ -1517,19 +1523,24 @@ async def _handle_lodging_request(
     logger.info("Lodging request session_id=%s turn=%d", session_id, turn_count)
 
     if not has_lodging(previous_preferences):
-        ctx = await resolve_effective_search_context(
-            payload.message, session.lat, session.lon,
+        effective_lat, effective_lon, effective_radius, search_center_metadata = await resolve_effective_search_context(
+            payload.message,
+            fallback_lat=session.lat,
+            fallback_lon=session.lon,
+            fallback_radius=session.radius,
         )
-        effective_lat = ctx.get("lat", session.lat)
-        effective_lon = ctx.get("lon", session.lon)
-        effective_radius = ctx.get("radius", session.radius or 5000)
 
         candidate_pois = await search_candidate_pois(
-            db, current_user, embedding_service,
-            query=payload.message, lat=effective_lat, lon=effective_lon,
-            radius_meters=effective_radius, limit=12,
+            db,
+            poi_repository,
+            payload.message,
+            current_user,
+            embedding_service,
+            lat=effective_lat,
+            lon=effective_lon,
+            radius=effective_radius,
+            limit=12,
             embedding_cache=embedding_cache,
-            poi_repository=poi_repository,
         )
         lodging_pois = [p for p in candidate_pois if 4 in (getattr(p, "category_ids", []) or [])]
     else:
@@ -1603,6 +1614,23 @@ async def _handle_lodging_mode(
 
     if "todos los dias" in normalized or "todo el finde" in normalized or "finde completo" in normalized:
         mode = "all_days"
+    elif "solo el" in normalized or "solo la" in normalized:
+        draft = (previous_preferences.get("trip_draft") or {})
+        trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+        mode = "all_days"
+        for i, day in enumerate(trip_days):
+            day_label = (day.get("day_label") or "").lower()
+            if any(part in normalized for part in day_label.split()):
+                mode = [i]
+                break
+    elif "finde nomas" in normalized or "finde nomás" in normalized:
+        draft = (previous_preferences.get("trip_draft") or {})
+        trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+        weekend_indices = [
+            i for i, day in enumerate(trip_days)
+            if day.get("day_index", 0) >= 5
+        ]
+        mode = weekend_indices if weekend_indices else "all_days"
     else:
         mode = "all_days"
 
