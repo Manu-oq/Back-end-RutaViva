@@ -20,7 +20,7 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
             confianza=0.2,
             entidades=[],
             herramientas_necesarias=["search_pois"],
-            preguntas_pendientes=["¿A qué destino querés ir?", "¿Qué fechas tenés en mente?"],
+            preguntas_pendientes=["¿A qué destino quieres ir?", "¿Qué fechas tienes en mente?"],
             actualizaciones_memoria=[],
             tono="neutro",
         )
@@ -81,9 +81,9 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
     confianza = 0.5 if entidades or memoria else 0.3
 
     if not found_dest and "build_itinerary" not in intenciones:
-        preguntas.append("¿A qué destino querés ir?")
+        preguntas.append("¿A qué destino quieres ir?")
     if not any(e.tipo == "fecha" for e in entidades):
-        preguntas.append("¿Qué fechas tenés en mente?")
+        preguntas.append("¿Qué fechas tienes en mente?")
 
     return ComprehensionResult(
         intenciones=intenciones,

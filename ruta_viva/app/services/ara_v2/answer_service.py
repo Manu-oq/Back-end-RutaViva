@@ -59,7 +59,7 @@ class AnswerService:
             f"Reglas de visita: {visit_rules_text}\n"
             f"Horarios: {poi.opening_hours_text or 'No disponible'}\n\n"
             f"PREGUNTA DEL USUARIO: {user_question}\n\n"
-            f"Responde en 2-4 oraciones. Si no tenes el dato, se honesto."
+            f"Responde en 2-4 oraciones. Si no tienes el dato, se honesto."
         )
 
         try:

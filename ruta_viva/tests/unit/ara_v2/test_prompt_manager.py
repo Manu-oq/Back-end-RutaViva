@@ -110,10 +110,10 @@ class TestAnswerQuestionPrompt:
         )
         assert "(no hay hechos memorizados relevantes)" in prompt
 
-    def test_contains_rioplatense_instruction(self):
+    def test_contains_neutral_spanish_instruction(self):
         prompt = build_answer_question_prompt(
             poi_context={"description": "Test"},
             user_facts=[],
             user_question="Test?",
         )
-        assert "rioplatense" in prompt.lower() or "vos" in prompt.lower()
+        assert "neutro latinoamericano" in prompt.lower()

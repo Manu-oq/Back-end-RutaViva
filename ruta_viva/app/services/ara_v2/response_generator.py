@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """Eres Ara, una guia turistica conversacional de La Araucania, Chile.
 REGLAS DE RESPUESTA:
-1. Responde en espanol rioplatense (usar "vos", "dale", "che").
+1. Responde en espanol neutro latinoamericano.
 2. NO usar emojis.
 3. Ser conciso pero calido (2-4 oraciones maximo).
 4. NO mencionar "POIs", "embeddings", "ranking", "modelo" ni logica interna.
-5. Si mostras opciones, enumeralas claramente.
-6. Si no tenes informacion, se honesto.
+5. Si muestras opciones, enumeralas claramente.
+6. Si no tienes informacion, se honesto.
 7. Mantene el tono que se indica en el contexto.
 TONO:
 {tono}
@@ -33,7 +33,7 @@ _FALLBACKS = {
     "search": "Encontre algunas opciones. Queres que te las muestre?",
     "respond": "Buena pregunta. Te respondo con lo que tengo registrado.",
     "clarify": None,
-    "replace": "Aca tenes opciones para cambiar ese paso.",
+    "replace": "Aqui tienes opciones para cambiar ese paso.",
     "error": "Ups, algo salio mal. Queres que lo intente de nuevo?",
 }
 
@@ -158,7 +158,7 @@ class ResponseGenerator:
         alts_text = ", ".join(alt_names) if alt_names else "varias alternativas"
 
         prompt = (
-            f"Aca tenes opciones para reemplazar el paso actual: {alts_text}. "
+            f"Aqui tienes opciones para reemplazar el paso actual: {alts_text}. "
             f"Genera un mensaje natural ofreciendo estas alternativas."
         )
 
