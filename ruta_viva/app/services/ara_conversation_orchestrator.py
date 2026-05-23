@@ -1464,15 +1464,50 @@ async def _handle_skip_day(
     llm_client: Any,
 ) -> AraSessionResponse:
     logger.info("Skip day requested session_id=%s turn=%d", session_id, turn_count)
+    current_day = get_current_day(previous_preferences)
+    if current_day:
+        has_activities = bool(
+            current_day.get("selected_pois") or current_day.get("meal_preferences") or current_day.get("activity_preferences")
+        )
+        if not has_activities:
+            day_label = current_day.get("day_label", "este dia")
+            assistant_text = build_day_skip_warning_message(day_label)
+            quick_replies = [
+                AraQuickReply(id="skip_yes", label=AraMessages.get("day_skip_yes"), value=f"si, dejemos {day_label} vacio", type="navigation"),
+                AraQuickReply(id="skip_no", label=AraMessages.get("day_skip_no", day=day_label), value=f"no, sigamos con {day_label}", type="navigation"),
+                AraQuickReply(id="que_arme_ara", label=AraMessages.get("cta_que_arme_ara"), value="que lo arme ara", type="generate"),
+            ]
+            try:
+                session = await _update_session_with_retry(
+                    ara_repository, db, session, current_user.id,
+                )
+                user_message = await ara_repository.add_message(db, session.id, "user", payload.message)
+                assistant_message = await ara_repository.add_message(
+                    db, session.id, "assistant", assistant_text,
+                    quick_replies=[reply.model_dump(mode="json") for reply in quick_replies],
+                    metadata=turn_classification,
+                )
+                await ara_repository.commit_or_rollback(db)
+                return AraSessionResponse(
+                    session_id=session.id, status=session.status,
+                    user_message=session_message_response(user_message),
+                    assistant_message=session_message_response(assistant_message),
+                    quick_replies=quick_replies, intent=_build_intent_info({}),
+                    preferences=_build_preference_summary(previous_preferences),
+                    candidate_pois=[], progress=build_progress_summary(previous_preferences),
+                )
+            except Exception:
+                await db.rollback()
+                logger.exception("Skip day warning failed session_id=%s", session_id)
+                raise
+
     prefs = advance_day(previous_preferences)
-    draft = (prefs.get("trip_draft") or {})
     current = get_current_day(prefs)
 
     if not current:
         assistant_text = AraMessages.get("day_empty_warning")
         quick_replies = [AraQuickReply(id="que_arme_ara", label="Que lo arme Ara", value="Que lo arme Ara", type="generate")]
     else:
-        day_label = current.get("day_label", "siguiente")
         assistant_text = build_day_greeting(prefs)
         quick_replies = build_day_navigation_chips(prefs)
 
@@ -1686,7 +1721,22 @@ async def _handle_focus_day(
     turn_classification: dict[str, Any],
 ) -> AraSessionResponse:
     logger.info("Focus day session_id=%s turn=%d", session_id, turn_count)
-    prefs = advance_day(previous_preferences, target_day_index=None)
+    draft = (previous_preferences.get("trip_draft") or {})
+    trip_days: list[dict[str, Any]] = draft.get("trip_days") or []
+    normalized = payload.message.lower().strip()
+    target_day_index = None
+    for i, day in enumerate(trip_days):
+        day_label = (day.get("day_label") or "").lower()
+        day_keywords = day_label.split()
+        if any(kw in normalized for kw in day_keywords):
+            target_day_index = i
+            break
+    if target_day_index is None and "dia" in normalized:
+        for i, day in enumerate(trip_days):
+            if f"dia {day.get('day_index', 0)}" in normalized:
+                target_day_index = i
+                break
+    prefs = advance_day(previous_preferences, target_day_index=target_day_index if target_day_index is not None else 0)
     current = get_current_day(prefs)
 
     if current:
