@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, AsyncGenerator
 from uuid import UUID
 
@@ -13,7 +14,6 @@ from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.ara import AraGenerateItineraryRequest, AraGenerateItineraryResponse
 from app.schemas.itinerary import GenerateItineraryRequest, GeneratedItinerary
-from app.services.ara_conversation_orchestrator import normalize_dates
 from app.services.ara_response_builder import build_refined_query
 from app.services.embedding_service import EmbeddingCache, OpenAIEmbeddingService
 from app.services.itinerary_generation_service import (
@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 ara_repository = AraRepository()
 poi_repository = POIRepository()
 itinerary_repository = ItineraryRepository()
+
+
+def normalize_dates(start_date: date | None, end_date: date | None) -> tuple[date, date]:
+    normalized_start = start_date or date.today()
+    normalized_end = end_date or normalized_start
+    return normalized_start, normalized_end
 
 
 def _candidate_uuid_list(candidate_poi_ids: list[UUID] | list[str] | None) -> list[UUID]:
