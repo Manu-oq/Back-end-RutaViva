@@ -14,6 +14,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.ara_message import AraMessage
+    from app.models.conversation_memory import ConversationMemory
     from app.models.itinerary import Itinerary
     from app.models.tourist_profile import TouristProfile
 
@@ -71,6 +72,7 @@ class AraSession(Base):
         cascade="all, delete-orphan",
     )
     generated_itinerary: Mapped[Itinerary | None] = relationship(lazy="selectin")
+    conversation_memories: Mapped[list[ConversationMemory]] = relationship(back_populates="session", lazy="noload")
 
     @property
     def lat(self) -> float | None:

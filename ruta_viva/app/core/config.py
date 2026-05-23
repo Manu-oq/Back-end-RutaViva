@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: str | None = None
+    # GPT-4o-mini para comprensión conversacional (Ara v2)
+    openai_gpt_mini_model: str = "gpt-4o-mini"
+    gpt_mini_timeout_seconds: float = 10.0
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_timeout_seconds: float = 90.0

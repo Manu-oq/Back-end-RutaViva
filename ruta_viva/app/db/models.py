@@ -2,6 +2,7 @@ from app.models.ara_message import AraMessage
 from app.models.ara_session import AraSession
 from app.models.bookmark import Bookmark
 from app.models.category import Category
+from app.models.conversation_memory import ConversationMemory
 from app.models.entrepreneur_profile import EntrepreneurProfile
 from app.models.entrepreneur_post import EntrepreneurPost
 from app.models.itinerary import Itinerary
@@ -28,4 +29,5 @@ __all__ = [
     "Review",
     "Itinerary",
     "ItineraryStep",
+    "ConversationMemory",
 ]

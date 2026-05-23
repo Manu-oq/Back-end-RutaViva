@@ -13,6 +13,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.bookmark import Bookmark
+    from app.models.conversation_memory import ConversationMemory
     from app.models.itinerary import Itinerary
     from app.models.review import Review
     from app.models.user import User
@@ -41,3 +42,4 @@ class TouristProfile(Base):
     bookmarks: Mapped[list[Bookmark]] = relationship(back_populates="tourist", lazy="noload")
     reviews: Mapped[list[Review]] = relationship(back_populates="tourist", lazy="noload")
     itineraries: Mapped[list[Itinerary]] = relationship(back_populates="tourist", lazy="noload")
+    conversation_memories: Mapped[list[ConversationMemory]] = relationship(back_populates="tourist", lazy="noload")
