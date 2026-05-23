@@ -27,12 +27,12 @@ class ConversationMemory(Base):
     confianza: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     contexto: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.now)
     expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         CheckConstraint("confianza >= 0 AND confianza <= 1", name="ck_confianza_range"),
-        Index("idx_conversation_memory_embedding", "embedding", postgresql_using="hnsw", postgresql_with={"m": 16, "ef_construction": 64}),
+        Index("idx_conversation_memory_embedding", "embedding", postgresql_using="hnsw", postgresql_ops={"embedding": "vector_cosine_ops"}, postgresql_with={"m": 16, "ef_construction": 64}),
     )
 
     # Relationships
