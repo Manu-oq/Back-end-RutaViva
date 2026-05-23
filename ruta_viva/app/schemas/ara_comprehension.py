@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Optional
+
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from app.schemas.itinerary import ItineraryResponse
 
 
 class MemoryFact(BaseModel):
@@ -46,3 +51,14 @@ class ComprehensionResult(BaseModel):
     actualizaciones_memoria: list[MemoryFact] = Field(default_factory=list)
     sugerir_quick_replies: list[QuickReplySuggestion] | None = None
     tono: str = Field(default="neutro", pattern="^(entusiasta|neutro|informativo|empatico)$")
+
+
+class ToolExecutionResult(BaseModel):
+    status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error)$")
+    response_text: str | None = None
+    quick_replies: list[QuickReplySuggestion] | None = None
+    candidate_pois: list[dict] | None = None
+    weather_forecast: str | None = None
+    itinerary: Optional["ItineraryResponse"] = None
+    context_payload: dict | None = None
+    error: str | None = None
