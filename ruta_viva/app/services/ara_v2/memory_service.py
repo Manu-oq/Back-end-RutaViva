@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -8,7 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation_memory import ConversationMemory
+from app.models.tourist_profile import TouristProfile
 from app.services.embedding_service import OpenAIEmbeddingService
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryService:
@@ -103,6 +107,43 @@ class MemoryService:
                 "confianza": row.confianza,
             })
         return summary
+
+    async def update_tourist_profile_embedding(
+        self,
+        db: AsyncSession,
+        tourist_id: UUID,
+        hecho: str,
+        confianza: float,
+    ) -> bool:
+        """Si el hecho es una preferencia fuerte, actualiza interests_embedding del perfil.
+
+        Usa media móvil exponencial: 90% perfil actual + 10% nuevo hecho.
+        Retorna True si se actualizó, False si no aplicaba.
+        """
+        if confianza <= 0.8:
+            return False
+
+        profile = await db.get(TouristProfile, tourist_id)
+        if profile is None:
+            return False
+
+        try:
+            fact_embedding = await self._embedding_service.get_embedding(hecho)
+        except Exception:
+            logger.warning("Failed to generate embedding for profile update, tourist_id=%s", tourist_id)
+            return False
+
+        if profile.interests_embedding is None:
+            profile.interests_embedding = fact_embedding
+        else:
+            profile.interests_embedding = [
+                (old * 0.9) + (new * 0.1)
+                for old, new in zip(profile.interests_embedding, fact_embedding)
+            ]
+
+        db.add(profile)
+        await db.flush()
+        return True
 
 
 _memory_service: MemoryService | None = None
