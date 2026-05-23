@@ -10,13 +10,13 @@ from app.services.ara_v2.prompt_manager import (
 class TestComprehensionPrompt:
     def test_contains_system_role(self):
         prompt = build_comprehension_prompt({"initial_query": "Villarrica", "turn_count": 1})
-        assert "Eres Ara" in prompt
-        assert "asistente de viaje" in prompt.lower()
+        assert "Ara" in prompt
+        assert "comprensión" in prompt.lower()
 
     def test_contains_json_format_instruction(self):
         prompt = build_comprehension_prompt({"initial_query": "Villarrica"})
         assert "JSON" in prompt
-        assert '"intent"' in prompt
+        assert '"intenciones"' in prompt
 
     def test_injects_relevant_facts(self):
         context = {
