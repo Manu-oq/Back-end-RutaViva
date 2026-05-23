@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
+
+from app.core.ara_constants import KNOWN_DESTINATION_NAMES
 from app.schemas.ara_comprehension import ComprehensionResult, ExtractedEntity, MemoryFact
 
-KNOWN_DESTINATIONS = [
-    "villarrica", "pucon", "pucon", "temuco", "valdivia", "osorno",
-    "la serena", "coihaique", "chiloe", "castro", "ancud",
-    "concon", "viña del mar", "valparaiso", "santiago",
-    "curarrehue", "malalcahuello", "congridad", "huapi",
-    "liucura", "queule", "budi", "toltén",
-]
+KNOWN_DESTINATIONS = [d for d in KNOWN_DESTINATION_NAMES if d not in ("santiago",)]
 
 
 def fallback_comprehend(user_message: str) -> ComprehensionResult:
@@ -72,8 +69,9 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
         month_name = date_match.group(2)
         months = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
                   "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12}
+        current_year = datetime.now().year
         month = months.get(month_name, 6)
-        entidades.append(ExtractedEntity(tipo="fecha", valor=f"2026-{month:02d}-{day:02d}", confianza=0.6))
+        entidades.append(ExtractedEntity(tipo="fecha", valor=f"{current_year}-{month:02d}-{day:02d}", confianza=0.6))
 
     if not intenciones:
         intenciones = ["general"]
