@@ -30,6 +30,10 @@ RUN apt-get update \
 COPY --from=builder /install /usr/local
 
 COPY app ./app
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY scripts ./scripts
+COPY pyproject.toml ./
 
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
 USER appuser
