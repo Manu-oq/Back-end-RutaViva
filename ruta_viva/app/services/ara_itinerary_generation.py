@@ -221,12 +221,15 @@ async def generate_itinerary_from_session(
     await ara_repository.update_session_context(db, session, status="generating")
     await ara_repository.commit_or_rollback(db)
 
-    generated_raw = await llm_service.generate_itinerary(
-        enriched_query,
-        context_pois,
-        weather_forecast,
-        schedule_guidance,
-    )
+    try:
+        generated_raw = await llm_service.generate_itinerary(
+            enriched_query,
+            context_pois,
+            weather_forecast,
+            schedule_guidance,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     _phase_llm = time.monotonic()
     logger.info("Phase: LLM response received session_id=%s elapsed=%.2fs", session_id, _phase_llm - _phase_weather)
 
@@ -239,9 +242,15 @@ async def generate_itinerary_from_session(
     valid_poi_ids = {poi.id for poi in context_pois}
     invalid_poi_ids = [step.poi_id for step in generated_itinerary.steps if step.poi_id not in valid_poi_ids]
     if invalid_poi_ids:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The LLM returned POIs outside Ara context.")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Ara recibió lugares fuera del contexto disponible. Intenta regenerar o ajustar la búsqueda.",
+        )
     if not generated_itinerary.steps:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Ara did not return itinerary steps.")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Ara no devolvió actividades para el itinerario. Intenta ajustar la búsqueda o ampliar las opciones.",
+        )
 
     validate_generated_itinerary_rules(generated_itinerary, context_pois, generation_payload)
     generated_itinerary = sanitize_generated_itinerary_context(generated_itinerary)

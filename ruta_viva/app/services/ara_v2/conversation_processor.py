@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ara_constants import KNOWN_DESTINATION_NAMES
 from app.models.ara_session import AraSession
 from app.models.conversation_memory import ConversationMemory
 from app.models.user import User
@@ -61,7 +63,7 @@ class ConversationProcessor:
             )
 
         # PASO 2: Obtener contexto de sesion
-        trip_draft = session.preferences_data.get("trip_draft") if session.preferences_data else None
+        trip_draft = self._build_trip_draft_context(session)
         candidate_pois_count = len(session.candidate_poi_ids or [])
 
         session_messages = self._get_recent_messages(session)
@@ -74,6 +76,8 @@ class ConversationProcessor:
             trip_draft=trip_draft,
             candidate_pois_count=candidate_pois_count,
         )
+        self._apply_comprehension_to_session(session, comprehension, user_message)
+        self._filter_resolved_pending_questions(session, comprehension)
 
         # PASO 4: Guardar hechos nuevos
         for fact in comprehension.actualizaciones_memoria:
@@ -126,6 +130,7 @@ class ConversationProcessor:
             session=session,
             user=current_user,
             db=db,
+            current_user_message=user_message,
         )
 
         # PASO 7: Generar respuesta
@@ -147,6 +152,8 @@ class ConversationProcessor:
         return AraSessionResponse(
             session_id=session.id,
             status=session.status,
+            start_date=session.start_date,
+            end_date=session.end_date,
             user_message=self._to_message_response(user_msg),
             assistant_message=self._to_message_response(assistant_msg),
             quick_replies=response.get("quick_replies", []),
@@ -155,12 +162,152 @@ class ConversationProcessor:
         )
 
     @staticmethod
+    def _build_trip_draft_context(session: AraSession) -> dict[str, Any]:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        trip_draft.setdefault("initial_query", session.initial_query)
+        if session.start_date is not None:
+            trip_draft["start_date"] = session.start_date.isoformat()
+        if session.end_date is not None:
+            trip_draft["end_date"] = session.end_date.isoformat()
+        trip_draft["has_destination"] = ConversationProcessor._session_has_destination(session)
+        return trip_draft
+
+    @staticmethod
+    def _parse_iso_date(value: str | None) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _detect_lodging_preference(user_message: str, comprehension: ComprehensionResult) -> dict[str, str] | None:
+        normalized = user_message.lower()
+        lodging_terms = {
+            "cabaña": ("Cabaña", "cabin"),
+            "cabana": ("Cabaña", "cabin"),
+            "hotel": ("Hotel", "hotel"),
+            "hostal": ("Hostal", "hostel"),
+            "hostel": ("Hostal", "hostel"),
+            "camping": ("Camping", "camping"),
+        }
+        for term, (label, lodging_type) in lodging_terms.items():
+            if term in normalized:
+                return {"name": label, "type": lodging_type, "source": "conversation"}
+
+        for fact in comprehension.actualizaciones_memoria:
+            if fact.categoria == "alojamiento":
+                return {"name": fact.hecho, "type": "lodging", "source": "memory"}
+        return None
+
+    @staticmethod
+    def _apply_comprehension_to_session(
+        session: AraSession,
+        comprehension: ComprehensionResult,
+        user_message: str,
+    ) -> None:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        trip_draft.setdefault("initial_query", session.initial_query)
+
+        # Las fechas elegidas en la UI tienen prioridad. Solo inferimos fechas
+        # desde texto cuando la sesion aun no trae rango.
+        if session.start_date is None and session.end_date is None and comprehension.rango_fechas:
+            start = ConversationProcessor._parse_iso_date(comprehension.rango_fechas.start)
+            end = ConversationProcessor._parse_iso_date(comprehension.rango_fechas.end)
+            if start is not None and end is not None and end >= start:
+                session.start_date = start
+                session.end_date = end
+
+        if session.start_date is not None:
+            trip_draft["start_date"] = session.start_date.isoformat()
+        if session.end_date is not None:
+            trip_draft["end_date"] = session.end_date.isoformat()
+
+        lodging = ConversationProcessor._detect_lodging_preference(user_message, comprehension)
+        if lodging is not None:
+            preferences["lodging"] = lodging
+            trip_draft["lodging"] = lodging
+
+        destinos = [entity.valor for entity in comprehension.entidades if entity.tipo == "destino"]
+        if destinos:
+            trip_draft["destination"] = destinos[0]
+
+        trip_draft["has_destination"] = ConversationProcessor._session_has_destination(session) or bool(destinos)
+        preferences["trip_draft"] = trip_draft
+        session.preferences_data = preferences
+
+    @staticmethod
+    def _session_has_destination(session: AraSession) -> bool:
+        preferences = session.preferences_data or {}
+        trip_draft = preferences.get("trip_draft") if isinstance(preferences, dict) else None
+        if isinstance(trip_draft, dict):
+            if trip_draft.get("destination") or trip_draft.get("search_center"):
+                return True
+            destination_scope = trip_draft.get("destination_scope")
+            if isinstance(destination_scope, dict) and destination_scope.get("label"):
+                return True
+
+        initial_query = (session.initial_query or "").lower()
+        return any(destination.lower() in initial_query for destination in KNOWN_DESTINATION_NAMES)
+
+    @staticmethod
+    def _filter_resolved_pending_questions(
+        session: AraSession,
+        comprehension: ComprehensionResult,
+    ) -> None:
+        if not comprehension.preguntas_pendientes:
+            return
+
+        has_dates = session.start_date is not None and session.end_date is not None
+        has_destination = ConversationProcessor._session_has_destination(session) or any(
+            entity.tipo == "destino" for entity in comprehension.entidades
+        )
+        preferences = session.preferences_data or {}
+        trip_draft = preferences.get("trip_draft") if isinstance(preferences, dict) else None
+        has_lodging = bool(
+            preferences.get("lodging")
+            or (trip_draft.get("lodging") if isinstance(trip_draft, dict) else None)
+        )
+
+        filtered: list[str] = []
+        for question in comprehension.preguntas_pendientes:
+            normalized = question.lower()
+            asks_dates = any(term in normalized for term in ("fecha", "cuándo", "cuando", "viajar", "planeas"))
+            asks_destination = any(term in normalized for term in ("destino", "dónde", "donde", "ir"))
+            asks_lodging = any(term in normalized for term in ("hotel", "cabaña", "cabana", "alojamiento", "hosped"))
+
+            if has_dates and asks_dates:
+                continue
+            if has_destination and asks_destination:
+                continue
+            if has_lodging and asks_lodging:
+                continue
+            filtered.append(question)
+
+        comprehension.preguntas_pendientes = filtered
+
+    @staticmethod
+    def _loaded_messages(session: AraSession) -> list[Any]:
+        """Devuelve mensajes ya cargados sin disparar IO implicito.
+
+        En SQLAlchemy async, acceder a una relacion no cargada puede intentar un
+        lazy-load sincronico y terminar en MissingGreenlet. Para el contexto de
+        conversacion solo necesitamos los mensajes que ya vienen precargados por
+        el repositorio, o una lista vacia en sesiones recien creadas.
+        """
+        return list(session.__dict__.get("messages") or [])
+
+    @staticmethod
     def _get_recent_messages(session: AraSession) -> list[dict[str, Any]]:
         """Extrae los ultimos MAX_SESSION_MESSAGES mensajes de la sesion."""
-        if not session.messages:
+        messages = ConversationProcessor._loaded_messages(session)
+        if not messages:
             return []
 
-        recent = session.messages[-MAX_SESSION_MESSAGES:]
+        recent = messages[-MAX_SESSION_MESSAGES:]
         return [
             {"role": msg.role, "content": msg.content, "metadata": msg.message_metadata}
             for msg in recent
@@ -185,6 +332,9 @@ class ConversationProcessor:
         )
         db.add(msg)
         await db.flush()
+        loaded_messages = session.__dict__.get("messages")
+        if loaded_messages is not None and msg not in loaded_messages:
+            loaded_messages.append(msg)
         return msg
 
     @staticmethod

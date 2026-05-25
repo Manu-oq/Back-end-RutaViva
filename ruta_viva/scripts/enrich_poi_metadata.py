@@ -30,6 +30,65 @@ logger = logging.getLogger("poi_enrichment")
 HTTP_TIMEOUT_SECONDS = 20.0
 REQUEST_DELAY_SECONDS = 1.5
 
+OSM_KEY_LABELS = {
+    "opening_hours": "Horario",
+    "description": "Descripción",
+    "description:es": "Descripción",
+    "amenity": "Tipo de servicio",
+    "tourism": "Tipo turístico",
+    "leisure": "Espacio recreativo",
+    "natural": "Elemento natural",
+    "shop": "Comercio",
+    "cuisine": "Cocina",
+    "wheelchair": "Accesibilidad",
+    "parking": "Estacionamiento",
+}
+
+OSM_VALUE_LABELS = {
+    "restaurant": "restaurante",
+    "cafe": "cafetería",
+    "fast_food": "comida rápida",
+    "bar": "bar",
+    "pub": "pub",
+    "hotel": "hotel",
+    "hostel": "hostal",
+    "guest_house": "hospedaje familiar",
+    "camp_site": "camping",
+    "museum": "museo",
+    "attraction": "atractivo turístico",
+    "viewpoint": "mirador",
+    "information": "centro de información turística",
+    "park": "parque",
+    "nature_reserve": "reserva natural",
+    "garden": "jardín",
+    "playground": "área de juegos",
+    "peak": "cerro o mirador natural",
+    "volcano": "volcán",
+    "beach": "playa",
+    "water": "cuerpo de agua",
+    "wetland": "humedal",
+    "hot_spring": "fuente termal",
+    "waterfall": "cascada o salto de agua",
+    "souvenir": "tienda de recuerdos y artesanía",
+    "craft": "artesanía",
+    "marketplace": "mercado o feria local",
+    "yes": "sí",
+    "no": "no",
+    "limited": "limitada",
+    "designated": "habilitado",
+    "customers": "para clientes",
+    "chilean": "chilena",
+    "italian": "italiana",
+    "coffee_shop": "café",
+    "sandwich": "sándwiches",
+    "burger": "hamburguesas",
+    "seafood": "mariscos",
+    "steak_house": "parrilla",
+    "barbecue": "parrilla",
+    "international": "internacional",
+    "vegetarian": "vegetariana",
+}
+
 
 def media_as_dict(media: object) -> dict[str, Any]:
     return media if isinstance(media, dict) else {}
@@ -49,6 +108,7 @@ def build_text_from_osm_tags(poi: POI) -> str:
     osm_tags = media.get("osm_tags")
     if not isinstance(osm_tags, dict):
         return ""
+
     useful_parts = []
     for key in (
         "opening_hours",
@@ -65,8 +125,17 @@ def build_text_from_osm_tags(poi: POI) -> str:
     ):
         value = osm_tags.get(key)
         if value:
-            useful_parts.append(f"{key}: {value}")
+            label = OSM_KEY_LABELS.get(key, key.replace("_", " ").title())
+            readable_value = humanize_osm_value(str(value))
+            useful_parts.append(f"{label}: {readable_value}")
     return ". ".join(useful_parts)
+
+
+def humanize_osm_value(value: str) -> str:
+    parts = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    if not parts:
+        return value.replace("_", " ")
+    return ", ".join(OSM_VALUE_LABELS.get(part, part.replace("_", " ")) for part in parts)
 
 
 async def fetch_public_text(url: str) -> str | None:

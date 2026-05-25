@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.db.base import Base
 from app.models.category import Category
 
 
@@ -48,11 +49,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """
-    Inicializa datos mínimos idempotentes de la base.
+    Inicializa schema y datos mínimos idempotentes de la base.
 
     Las categorías base usan IDs fijos porque el resto del backend, los scripts
     de ingesta y la tesis las tratan como taxonomía estable.
     """
+    import app.db.models  # noqa: F401
+
+    async with engine.begin() as connection:
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await connection.run_sync(Base.metadata.create_all)
+
     async with AsyncSessionLocal() as session:
         category_insert = insert(Category).values(BASE_CATEGORIES)
         await session.execute(

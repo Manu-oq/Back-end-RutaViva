@@ -9,7 +9,12 @@ from app.schemas.ara_comprehension import ComprehensionResult, ExtractedEntity, 
 KNOWN_DESTINATIONS = [d for d in KNOWN_DESTINATION_NAMES if d not in ("santiago",)]
 
 
-def fallback_comprehend(user_message: str) -> ComprehensionResult:
+def fallback_comprehend(
+    user_message: str,
+    *,
+    has_dates: bool = False,
+    has_destination: bool = False,
+) -> ComprehensionResult:
     """Comprensión basada en reglas simples cuando GPT-4o-mini falla."""
     msg = user_message.lower().strip()
 
@@ -20,7 +25,10 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
             confianza=0.2,
             entidades=[],
             herramientas_necesarias=["search_pois"],
-            preguntas_pendientes=["¿A qué destino quieres ir?", "¿Qué fechas tienes en mente?"],
+            preguntas_pendientes=[
+                *([] if has_destination else ["¿A qué destino quieres ir?"]),
+                *([] if has_dates else ["¿Qué fechas tienes en mente?"]),
+            ],
             actualizaciones_memoria=[],
             tono="neutro",
         )
@@ -63,6 +71,54 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
     if "familia" in msg or "con niños" in msg or "con hijos" in msg:
         memoria.append(MemoryFact(hecho="viaja con familia", categoria="entidad", confianza=0.75))
 
+    if any(kw in msg for kw in ["cabaña", "cabana", "hotel", "hostal", "hostel", "camping"]):
+        memoria.append(MemoryFact(hecho="preferencia de alojamiento mencionada", categoria="alojamiento", confianza=0.75))
+
+    # Category detection: gastronomía
+    if any(kw in msg for kw in ["restaurante", "comida", "gastronomia", "gastronomía", "comer", "almuerzo", "cena", "merendar"]):
+        entidades.append(ExtractedEntity(tipo="categoria", valor="gastronomía", confianza=0.8))
+        if "search_pois" not in intenciones:
+            intenciones.append("search_pois")
+            herramientas.append("search_pois")
+
+    # Category detection: pizza
+    if any(kw in msg for kw in ["pizza", "pizzeria", "pizzería"]):
+        entidades.append(ExtractedEntity(tipo="preferencia", valor="pizza", confianza=0.85))
+        if not any(e.tipo == "categoria" and e.valor == "gastronomía" for e in entidades):
+            entidades.append(ExtractedEntity(tipo="categoria", valor="gastronomía", confianza=0.8))
+            if "search_pois" not in intenciones:
+                intenciones.append("search_pois")
+                herramientas.append("search_pois")
+
+    # Category detection: café
+    if any(kw in msg for kw in ["cafe", "café", "cafeteria", "cafetería", "coffee"]):
+        entidades.append(ExtractedEntity(tipo="categoria", valor="gastronomía", confianza=0.8))
+        entidades.append(ExtractedEntity(tipo="preferencia", valor="café", confianza=0.85))
+        if "search_pois" not in intenciones:
+            intenciones.append("search_pois")
+            herramientas.append("search_pois")
+
+    # Category detection: alojamiento
+    if any(kw in msg for kw in ["hotel", "hostal", "hostel", "cabaña", "cabana", "camping", "alojamiento"]):
+        entidades.append(ExtractedEntity(tipo="categoria", valor="alojamiento", confianza=0.8))
+        if "search_pois" not in intenciones:
+            intenciones.append("search_pois")
+            herramientas.append("search_pois")
+
+    # Category detection: naturaleza/trekking
+    if any(kw in msg for kw in ["senderismo", "trekking", "caminata", "sendero", "hiking"]):
+        entidades.append(ExtractedEntity(tipo="categoria", valor="naturaleza", confianza=0.8))
+        if "search_pois" not in intenciones:
+            intenciones.append("search_pois")
+            herramientas.append("search_pois")
+
+    # Category detection: termas
+    if any(kw in msg for kw in ["termas", "terma", "thermal", "spa", "bienestar"]):
+        entidades.append(ExtractedEntity(tipo="categoria", valor="termas", confianza=0.8))
+        if "search_pois" not in intenciones:
+            intenciones.append("search_pois")
+            herramientas.append("search_pois")
+
     date_match = re.search(r'(\d{1,2})\s+(?:de\s+)?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)', msg)
     if date_match:
         day = int(date_match.group(1))
@@ -80,9 +136,9 @@ def fallback_comprehend(user_message: str) -> ComprehensionResult:
     intencion_principal = intenciones[0] if intenciones else "general"
     confianza = 0.5 if entidades or memoria else 0.3
 
-    if not found_dest and "build_itinerary" not in intenciones:
+    if not found_dest and not has_destination and "build_itinerary" not in intenciones:
         preguntas.append("¿A qué destino quieres ir?")
-    if not any(e.tipo == "fecha" for e in entidades):
+    if not has_dates and not any(e.tipo == "fecha" for e in entidades):
         preguntas.append("¿Qué fechas tienes en mente?")
 
     return ComprehensionResult(

@@ -262,7 +262,7 @@ async def search_candidate_pois(
     poi_repository: POIRepository,
     payload_query: str,
     current_user: Any,
-    embedding_service: OpenAIEmbeddingService,
+    embedding_service: OpenAIEmbeddingService | None,
     *,
     lat: float | None,
     lon: float | None,
@@ -272,6 +272,10 @@ async def search_candidate_pois(
 ) -> list:
     if lat is None or lon is None:
         return []
+
+    if embedding_service is None:
+        from app.services.embedding_service import get_embedding_service
+        embedding_service = get_embedding_service()
 
     if embedding_cache is not None:
         query_embedding = await embedding_cache.get_embedding(payload_query)

@@ -714,6 +714,240 @@ def infer_visit_rules(name: str, tags: dict[str, str], category_names: list[str]
     return rules
 
 
+OSM_TAG_HUMANIZED: dict[str, str] = {
+    # Naturaleza
+    "peak": "cerro o mirador natural con vistas panorámicas",
+    "volcano": "volcán activo o inactivo, atractivo geológico",
+    "beach": "playa con acceso a lago o río",
+    "waterfall": "cascada o salto de agua natural",
+    "bay": "bahía o ensenada costera",
+    "cave_entrance": "entrada de cueva o formación rocosa",
+    "cliff": "acantilado con vistas al paisaje",
+    "forest": "bosque nativo con senderos naturales",
+    "geyser": "géiser o fuente termal natural",
+    "glacier": "glaciar o masa de hielo natural",
+    "hot_spring": "fuente de agua termal natural",
+    "peninsula": "península o formación costera",
+    "reef": "arrecife o formación rocosa marina",
+    "rock": "formación rocosa natural",
+    "saddle": "paso de montaña entre cerros",
+    "spring": "nacimiento de agua natural",
+    "stone": "formación rocosa o piedra natural",
+    "tree": "árbol notable o punto de referencia natural",
+    "water": "cuerpo de agua natural",
+    "wetland": "humedal o zona húmeda con fauna nativa",
+    "wood": "bosque o área arbolada",
+    # Turismo
+    "viewpoint": "mirador con vistas panorámicas del paisaje",
+    "museum": "museo con colecciones históricas o culturales",
+    "hotel": "hotel con servicios de hospedaje",
+    "hostel": "albergue u hostal para viajeros",
+    "guest_house": "hospedaje familiar o casa de huéspedes",
+    "apartment": "apartamento o departamento en alquiler",
+    "camp_site": "camping o área de acampada",
+    "caravan_site": "área para caravanas o autocaravanas",
+    "wilderness_hut": "refugio de montaña o cabaña rústica",
+    "chalet": "cabaña o chalet de montaña",
+    "information": "centro de información turística",
+    "attraction": "atractivo turístico de interés",
+    "picnic_site": "área de picnic con mesas y sombra",
+    "zoo": "zoológico o centro de fauna local",
+    "theme_park": "parque temático o de diversiones",
+    # Gastronomía
+    "restaurant": "restaurante con cocina local",
+    "cafe": "café o cafetería con bebidas y snacks",
+    "fast_food": "comida rápida para llevar",
+    "bar": "bar o pub con bebidas",
+    "pub": "pub o bar con ambiente local",
+    "food_court": "patio de comidas con varias opciones",
+    "ice_cream": "heladería artesanal",
+    # Cultura
+    "arts_centre": "centro de artes con exposiciones y talleres",
+    "cinema": "cine o sala de proyecciones",
+    "community_centre": "centro comunitario o cultural",
+    "events_venue": "sala de eventos o espectáculos",
+    "library": "biblioteca pública o comunitaria",
+    "theatre": "teatro con programación cultural",
+    # Recreación
+    "dog_park": "parque canino o área para mascotas",
+    "firepit": "fogón o área de fogata",
+    "fishing": "zona de pesca deportiva o recreativa",
+    "garden": "jardín botánico o área verde ornamental",
+    "marina": "marina o puerto deportivo",
+    "nature_reserve": "reserva natural con flora y fauna nativa",
+    "park": "parque urbano o natural para recreación",
+    "picnic_table": "mesa de picnic en área verde",
+    "playground": "área de juegos infantiles",
+    "sports_centre": "centro deportivo con instalaciones",
+    "stadium": "estadio o cancha deportiva",
+    "swimming_area": "área de natación natural",
+    "swimming_pool": "piscina o alberca",
+    "track": "pista o circuito deportivo",
+    "water_park": "parque acuático",
+    "common": "área verde comunitaria",
+    "bird_hide": "observatorio de aves",
+    # Servicios
+    "toilets": "baños públicos",
+    "public_bath": "baño público o termal",
+    "fuel": "estación de servicio o combustibles",
+    "atm": "cajero automático",
+    "bank": "banco o entidad financiera",
+    "pharmacy": "farmacia o botica",
+    "clinic": "clínica o centro de salud",
+    "hospital": "hospital o centro médico",
+    "police": "comisaría o puesto policial",
+    "post_office": "oficina de correos",
+    "charging_station": "estación de carga eléctrica",
+    "bureau_de_change": "casa de cambio de moneda",
+    "drinking_water": "fuente de agua potable",
+    "ranger_station": "estación de guardaparques",
+    "recycling": "punto de reciclaje",
+    "shower": "duchas públicas",
+    "veterinary": "veterinaria o centro de salud animal",
+    # Transporte
+    "parking": "estacionamiento público",
+    "bicycle_parking": "estacionamiento para bicicletas",
+    "bicycle_rental": "alquiler de bicicletas",
+    "bus_station": "estación de buses",
+    "car_rental": "alquiler de autos",
+    "ferry_terminal": "terminal de ferry o embarcadero",
+    "taxi": "parada de taxi",
+    # Comercio
+    "marketplace": "mercado o feria local",
+    "souvenir": "tienda de recuerdos y artesanías",
+    "bakery": "panadería artesanal",
+    "supermarket": "supermercado o minimarket",
+    "convenience": "tienda de conveniencia",
+    "alcohol": "licorería o vinoteca",
+    "butcher": "carnicería",
+    "coffee": "tienda de café",
+    "tea": "tienda de té",
+    "wine": "vinoteca o tienda de vinos",
+    "outdoor": "tienda de equipos outdoor",
+    "sports": "tienda de artículos deportivos",
+    "travel_agency": "agencia de viajes",
+    "farm": "feria o venta de productos de granja",
+    # Estructuras
+    "lighthouse": "faro costero o marítimo",
+    "tower": "torre o mirador elevado",
+    "bridge": "puente o pasarela",
+    "pier": "muelle o embarcadero",
+    "beacon": "señal o baliza luminosa",
+    "cross": "cruz o monumento religioso",
+    "obelisk": "obelisco o monumento conmemorativo",
+    "observatory": "observatorio astronómico o natural",
+    "survey_point": "punto de referencia topográfica",
+    "water_tower": "torre de agua",
+    "watermill": "molino de agua",
+    # Otros
+    "trail": "sendero o camino de trekking",
+    "hiking": "ruta de senderismo",
+    "route": "ruta o recorrido turístico",
+    "foot": "sendero peatonal",
+    "horse": "ruta ecuestre",
+    "bicycle": "ciclovía o ruta ciclista",
+    "mtb": "ruta de mountain bike",
+}
+
+CATEGORY_DESCRIPTIONS: dict[str, str] = {
+    "Naturaleza": "Atractivo natural en la Región de La Araucanía, ideal para conectar con el entorno.",
+    "Gastronomía": "Espacio gastronómico que ofrece opciones culinarias en la zona.",
+    "Turismo": "Punto de interés turístico que destaca en la Región de La Araucanía.",
+    "Alojamiento": "Opción de hospedaje para visitantes en la zona.",
+    "Cultura": "Espacio cultural con relevancia histórica o artística local.",
+    "Trekking/Senderismo": "Ruta o sendero apto para caminatas y exploración natural.",
+    "Lagos/Ríos/Playas": "Cuerpo de agua o zona costera con acceso para visitantes.",
+    "Montañas/Volcanes/Miradores": "Elevación natural o mirador con vistas panorámicas.",
+    "Termas/Bienestar": "Centro de termas o spa para relajo y bienestar.",
+    "Parques/Reservas": "Área protegida o parque con valor natural o recreativo.",
+    "Museos/Patrimonio": "Museo o sitio patrimonial con relevancia histórica.",
+    "Aventura/Deportes": "Espacio para actividades deportivas o de aventura.",
+    "Servicios turísticos/Información": "Punto de información o apoyo para turistas.",
+    "Transporte/Accesos": "Punto de acceso o transporte para movilidad en la zona.",
+    "Artesanía/Compras locales": "Espacio para compras de artesanía o productos locales.",
+}
+
+STRICT_BLACKLIST = {
+    "amenity": {
+        "grave_yard", "crematorium", "funeral_hall",
+        "toilets", "public_bath",
+        "fuel", "atm", "bank", "bureau_de_change",
+        "parking",
+        "recycling", "waste_disposal", "waste_transfer_station",
+        "veterinary",
+    },
+    "landuse": {
+        "cemetery", "industrial", "landfill", "quarry",
+        "military", "brownfield", "construction",
+    },
+    "shop": {
+        "car", "car_repair", "car_parts", "tyres",
+        "hardware", "doityourself", "electronics",
+        "computer", "mobile_phone", "chemist",
+        "laundry", "dry_cleaning", "hairdresser",
+        "beauty", "massage", "tattoo",
+        "optician", "jewelry", "furniture",
+        "appliance", "carpet", "curtain",
+        "fabric", "paint", "trade",
+        "wholesale", "kiosk",
+    },
+    "man_made": {
+        "wastewater_plant", "water_works", "pumping_station",
+        "communications_tower", "surveillance", "street_cabinet",
+        "pipeline", "storage_tank", "silo",
+    },
+    "highway": {
+        "services", "rest_area",
+    },
+}
+
+
+def _is_strictly_blacklisted(tags: dict[str, str]) -> bool:
+    """Return True when a candidate is a pure non-touristic/logistic POI."""
+    has_explicit_tourism_value = bool(clean_text(tags.get("tourism")))
+    if has_explicit_tourism_value:
+        return False
+
+    for key, blacklist in STRICT_BLACKLIST.items():
+        value = tags.get(key)
+        if value and value in blacklist:
+            return True
+    return False
+
+
+def _humanize_tag(tag: str) -> str:
+    return OSM_TAG_HUMANIZED.get(tag, tag.replace("_", " "))
+
+
+OSM_VALUE_HUMANIZED: dict[str, str] = {
+    "chilean": "chilena",
+    "regional": "regional",
+    "local": "local",
+    "italian": "italiana",
+    "pizza": "pizza",
+    "coffee_shop": "café",
+    "coffee": "café",
+    "sandwich": "sándwiches",
+    "burger": "hamburguesas",
+    "seafood": "mariscos",
+    "fish": "pescados",
+    "steak_house": "parrilla",
+    "barbecue": "parrilla",
+    "ice_cream": "helados",
+    "bakery": "panadería",
+    "latin_american": "latinoamericana",
+    "international": "internacional",
+    "vegetarian": "vegetariana",
+}
+
+
+def _humanize_list(value: str) -> str:
+    parts = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    if not parts:
+        return value.replace("_", " ")
+    return ", ".join(OSM_VALUE_HUMANIZED.get(part, part.replace("_", " ")) for part in parts)
+
+
 def describe_place_type(tags: dict[str, str]) -> str:
     tourism = tags.get("tourism")
     amenity = tags.get("amenity")
@@ -734,8 +968,17 @@ def describe_place_type(tags: dict[str, str]) -> str:
     if amenity in FOOD_AMENITIES:
         cuisine = clean_text(tags.get("cuisine"))
         if cuisine:
-            return f"espacio gastronómico tipo {amenity.replace('_', ' ')} con cocina {cuisine.replace(';', ', ')}"
-        return f"espacio gastronómico tipo {amenity.replace('_', ' ')}"
+            food_base = {
+                "restaurant": "restaurante",
+                "cafe": "cafetería",
+                "fast_food": "local de comida rápida",
+                "bar": "bar",
+                "pub": "pub",
+                "food_court": "patio de comidas",
+                "ice_cream": "heladería",
+            }.get(amenity, _humanize_tag(amenity))
+            return f"{food_base} con especialidad {_humanize_list(cuisine)}"
+        return _humanize_tag(amenity)
 
     if amenity in CEMETERY_AMENITIES or landuse == "cemetery":
         return "cementerio o memorial"
@@ -744,46 +987,51 @@ def describe_place_type(tags: dict[str, str]) -> str:
         return f"zona de uso {landuse.replace('_', ' ')}"
 
     if amenity in CULTURE_AMENITIES:
-        return f"espacio cultural tipo {amenity.replace('_', ' ')}"
+        return _humanize_tag(amenity)
 
     if amenity in TRANSPORT_AMENITIES or highway == "bus_stop" or railway in {"station", "halt"}:
-        return "punto de transporte o acceso"
+        tag_key = amenity or highway or railway
+        return _humanize_tag(tag_key) if tag_key else "punto de transporte o acceso"
 
     if amenity in SERVICE_AMENITIES:
-        return f"servicio de apoyo para viajeros tipo {amenity.replace('_', ' ')}"
+        return _humanize_tag(amenity)
 
     if leisure in RELEVANT_LEISURE:
-        return f"área recreativa tipo {leisure.replace('_', ' ')}"
+        return _humanize_tag(leisure)
 
     if natural in NATURAL_FEATURES:
-        return f"atractivo natural tipo {natural.replace('_', ' ')}"
+        return _humanize_tag(natural)
 
     if historic:
-        return f"hito histórico o patrimonial tipo {historic.replace('_', ' ')}"
+        tag_val = _humanize_tag(historic)
+        return f"hito histórico o patrimonial: {tag_val}"
 
     if shop:
-        return f"comercio local tipo {shop.replace('_', ' ')}"
+        return _humanize_tag(shop)
 
     if craft:
-        return f"actividad artesanal o productiva tipo {craft.replace('_', ' ')}"
+        tag_val = _humanize_tag(craft)
+        return f"actividad artesanal o productiva: {tag_val}"
 
     if sport:
-        return f"espacio o referencia deportiva relacionada con {sport.replace('_', ' ')}"
+        tag_val = _humanize_tag(sport)
+        return f"espacio deportivo relacionado con {tag_val}"
 
     if man_made:
-        return f"estructura o hito construido tipo {man_made.replace('_', ' ')}"
+        return _humanize_tag(man_made)
 
     if waterway:
-        return f"curso o cuerpo de agua tipo {waterway.replace('_', ' ')}"
+        tag_val = _humanize_tag(waterway)
+        return f"curso o cuerpo de agua: {tag_val}"
 
     if place:
-        return f"localidad o referencia territorial tipo {place.replace('_', ' ')}"
+        return f"localidad o referencia territorial: {place.replace('_', ' ')}"
 
     if route:
-        return f"ruta o recorrido tipo {route.replace('_', ' ')}"
+        return _humanize_tag(route)
 
     if tourism:
-        return f"atractivo turístico tipo {tourism.replace('_', ' ')}"
+        return _humanize_tag(tourism)
 
     return "punto de interés turístico"
 
@@ -801,11 +1049,17 @@ def build_description(name: str, tags: dict[str, str]) -> str:
     cuisine = clean_text(tags.get("cuisine"))
     operator = clean_text(tags.get("operator"))
 
-    base = f"{name} es un {place_type} ubicado en la Región de La Araucanía, Chile."
+    category_names = infer_category_names(tags)
+    fallback_desc = next(
+        (CATEGORY_DESCRIPTIONS[cat_name] for cat_name in category_names if cat_name in CATEGORY_DESCRIPTIONS),
+        CATEGORY_DESCRIPTIONS["Turismo"],
+    )
+
+    base = f"{name} es un lugar descrito como {place_type} en la Región de La Araucanía, Chile. {fallback_desc}"
     if locality:
         base += f" Se ubica o referencia en el sector de {locality}."
-    if cuisine:
-        base += f" Se destaca por su cocina o especialidad en {cuisine.replace(';', ', ')}."
+    if cuisine and _humanize_list(cuisine) not in place_type:
+        base += f" Se destaca por su cocina o especialidad en {_humanize_list(cuisine)}."
     if operator:
         base += f" Operado por {operator}."
     return base
@@ -852,6 +1106,13 @@ def build_multimedia_payload(element: dict[str, Any], tags: dict[str, str]) -> d
         "route",
         "landuse",
         "industrial",
+        "opening_hours",
+        "description",
+        "description:es",
+        "cuisine",
+        "wheelchair",
+        "parking",
+        "operator",
     }
     osm_tags = {key: value for key, value in tags.items() if key in relevant_osm_tag_keys}
     if osm_tags:
@@ -864,6 +1125,9 @@ def build_place(element: dict[str, Any]) -> OSMPlace | None:
     tags = {str(k): str(v) for k, v in (element.get("tags") or {}).items()}
     name = clean_text(tags.get("name"))
     if not name:
+        return None
+
+    if _is_strictly_blacklisted(tags):
         return None
 
     latitude, longitude = get_lat_lon(element)

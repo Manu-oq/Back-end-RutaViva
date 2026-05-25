@@ -199,6 +199,31 @@ class TestComprehensionResultValidation:
                 "actualizaciones_memoria": [{"hecho": "test", "categoria": "invalida", "confianza": 0.5}],
             })
 
+    def test_lodging_memory_category_is_valid(self):
+        """GPT puede clasificar alojamiento sin botar la comprensión a fallback."""
+        result = ComprehensionResult.model_validate({
+            "intenciones": ["planificar_viaje"],
+            "intencion_principal": "planificar_viaje",
+            "confianza": 0.9,
+            "entidades": [],
+            "herramientas_necesarias": [],
+            "preguntas_pendientes": [],
+            "actualizaciones_memoria": [
+                {"hecho": "prefiere cabaña", "categoria": "alojamiento", "confianza": 0.9}
+            ],
+        })
+
+        assert result.actualizaciones_memoria[0].categoria == "alojamiento"
+
+    def test_fallback_does_not_ask_dates_when_context_has_dates(self):
+        """Fallback no debe preguntar fechas si la UI ya las envió."""
+        result = fallback_comprehend(
+            "Hola Ara, quiero organizar un viaje a Pucón",
+            has_dates=True,
+        )
+
+        assert not any("fecha" in question.lower() for question in result.preguntas_pendientes)
+
 
 class TestComprensorFallback:
     """Tests del Comprensor con mocks de fallo de GPT."""
@@ -275,3 +300,32 @@ class TestComprensorFallback:
             assert result.confianza == 0.95
             assert len(result.entidades) == 1
             assert result.entidades[0].valor == "Villarrica"
+
+    @pytest.mark.asyncio
+    async def test_gpt_entity_type_poi_uppercase_is_normalized(self):
+        """GPT puede devolver POI en mayuscula sin activar fallback."""
+        from app.services.ara_v2.comprehender import Comprensor
+
+        gpt_response = {
+            "intenciones": ["answer_question"],
+            "intencion_principal": "answer_question",
+            "confianza": 0.9,
+            "entidades": [{"tipo": "POI", "valor": "Pucón Outdoor", "confianza": 0.9}],
+            "rango_fechas": None,
+            "herramientas_necesarias": ["answer_question"],
+            "preguntas_pendientes": [],
+            "actualizaciones_memoria": [],
+            "sugerir_quick_replies": None,
+            "tono": "Neutro",
+        }
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps(gpt_response)
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with patch("app.services.ara_v2.comprehender.get_gpt_mini_client", return_value=mock_client):
+            comprensor = Comprensor()
+            result = await comprensor.comprehend("Qué es Pucón Outdoor?")
+
+        assert result.entidades[0].tipo == "poi"
+        assert result.intencion_principal == "answer_question"

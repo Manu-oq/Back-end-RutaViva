@@ -27,13 +27,24 @@ async def handle_message_v2(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if payload.start_date is not None:
+        session.start_date = payload.start_date
+    if payload.end_date is not None:
+        session.end_date = payload.end_date
+
     processor = get_conversation_processor()
-    return await processor.process_user_message(
-        db=db,
-        session=session,
-        current_user=current_user,
-        user_message=payload.message,
-    )
+    try:
+        response = await processor.process_user_message(
+            db=db,
+            session=session,
+            current_user=current_user,
+            user_message=payload.message,
+        )
+        await ara_repository.commit_or_rollback(db)
+        return response
+    except Exception:
+        await db.rollback()
+        raise
 
 
 async def create_session_v2(
@@ -41,34 +52,37 @@ async def create_session_v2(
     current_user: User,
     payload: AraSessionCreate,
 ) -> AraSessionResponse:
-    """Crear nueva sesion de Ara v2."""
-    from app.schemas.ara import AraIntentInfo, AraPreferenceSummary
+    """Crear nueva sesion de Ara v2 y procesar el primer mensaje del usuario."""
+    try:
+        session = await ara_repository.create_session(
+            db,
+            tourist_id=current_user.id,
+            initial_query=payload.initial_message,
+            lat=payload.lat,
+            lon=payload.lon,
+            radius=payload.radius,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            intent_data={"initial_query": payload.initial_message},
+            preferences_data={
+                "trip_draft": {
+                    "initial_query": payload.initial_message,
+                    "start_date": payload.start_date.isoformat() if payload.start_date else None,
+                    "end_date": payload.end_date.isoformat() if payload.end_date else None,
+                }
+            },
+            candidate_poi_ids=None,
+        )
 
-    session = await ara_repository.create_session(
-        db,
-        tourist_id=current_user.id,
-        initial_query=payload.initial_message,
-        lat=payload.lat,
-        lon=payload.lon,
-        radius=payload.radius,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
-        intent_data={"initial_query": payload.initial_message},
-        preferences_data={},
-        candidate_poi_ids=None,
-    )
-
-    return AraSessionResponse(
-        session_id=session.id,
-        status=session.status,
-        user_message=None,
-        assistant_message=None,
-        quick_replies=[],
-        intent=AraIntentInfo(
-            intents=["planificar_viaje"],
-            primary_intent="planificar_viaje",
-            turn_count=0,
-        ),
-        preferences=AraPreferenceSummary(),
-        candidate_pois=[],
-    )
+        processor = get_conversation_processor()
+        response = await processor.process_user_message(
+            db=db,
+            session=session,
+            current_user=current_user,
+            user_message=payload.initial_message,
+        )
+        await ara_repository.commit_or_rollback(db)
+        return response
+    except Exception:
+        await db.rollback()
+        raise

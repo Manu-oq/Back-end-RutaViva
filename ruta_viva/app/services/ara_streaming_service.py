@@ -213,12 +213,16 @@ async def stream_itinerary_generation(
         await ara_repository.update_session_context(db, session, status="generating")
         await ara_repository.commit_or_rollback(db)
 
-        generated_raw = await llm_service.generate_itinerary(
-            enriched_query,
-            context_pois,
-            weather_forecast,
-            schedule_guidance,
-        )
+        try:
+            generated_raw = await llm_service.generate_itinerary(
+                enriched_query,
+                context_pois,
+                weather_forecast,
+                schedule_guidance,
+            )
+        except ValueError as exc:
+            yield {"event": "error", "data": {"message": str(exc)}}
+            return
         generated_itinerary = GeneratedItinerary.model_validate(generated_raw)
 
         yield {"event": "status", "data": {"phase": "validating", "message": "Verificando horarios y calidad..."}}
@@ -230,10 +234,10 @@ async def stream_itinerary_generation(
         valid_poi_ids = {poi.id for poi in context_pois}
         invalid_poi_ids = [step.poi_id for step in generated_itinerary.steps if step.poi_id not in valid_poi_ids]
         if invalid_poi_ids:
-            yield {"event": "error", "data": {"message": "The LLM returned POIs outside Ara context."}}
+            yield {"event": "error", "data": {"message": "Ara recibió lugares fuera del contexto disponible. Intenta regenerar o ajustar la búsqueda."}}
             return
         if not generated_itinerary.steps:
-            yield {"event": "error", "data": {"message": "Ara did not return itinerary steps."}}
+            yield {"event": "error", "data": {"message": "Ara no devolvió actividades para el itinerario. Intenta ajustar la búsqueda o ampliar las opciones."}}
             return
 
         validate_generated_itinerary_rules(generated_itinerary, context_pois, generation_payload)

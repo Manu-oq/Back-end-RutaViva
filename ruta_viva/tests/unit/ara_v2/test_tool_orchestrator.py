@@ -85,7 +85,7 @@ class TestGetWeatherTool:
             actualizaciones_memoria=[],
         )
 
-        with patch("app.services.weather_service.get_forecast", new=AsyncMock(return_value="Soleado, 22C")):
+        with patch("app.services.ara_v2.tool_orchestrator.get_weather_forecast", new=AsyncMock(return_value="Soleado, 22C")):
             result = await orchestrator.execute(comprehension, session, user, db_session)
 
             assert result.weather_forecast is not None
@@ -115,7 +115,14 @@ class TestBuildItineraryTool:
         mock_poi = MagicMock()
         mock_poi.id = uuid4()
         mock_poi.name = "Volcan"
-
+        mock_poi.description = "Volcan activo"
+        mock_poi.access_type = "public"
+        mock_poi.latitude = -39.28
+        mock_poi.longitude = -71.95
+        mock_poi.category_ids = [1]
+        mock_poi.image_url = None
+        mock_poi.distance_meters = None
+        mock_poi.poi_role = "activity"
         mock_itinerary = MagicMock()
         mock_itinerary.id = uuid4()
 
@@ -155,6 +162,15 @@ class TestBuildItineraryTool:
 
         mock_poi = MagicMock()
         mock_poi.id = uuid4()
+        mock_poi.name = "Volcan"
+        mock_poi.description = "Volcan activo"
+        mock_poi.access_type = "public"
+        mock_poi.latitude = -39.28
+        mock_poi.longitude = -71.95
+        mock_poi.category_ids = [1]
+        mock_poi.image_url = None
+        mock_poi.distance_meters = None
+        mock_poi.poi_role = "activity"
         mock_itinerary = MagicMock()
         mock_itinerary.id = uuid4()
 
@@ -202,6 +218,82 @@ class TestAnswerQuestionTool:
             assert result.response_text is not None
             assert "volcan" in result.response_text.lower() or "dificultad" in result.response_text.lower()
             assert result.status == "respond"
+
+    @pytest.mark.asyncio
+    async def test_poi_question_does_not_return_repeated_search_cards(self, db_session: AsyncSession):
+        orchestrator = ToolOrchestrator()
+        user = _make_user()
+        session = _make_session(user_id=user.id)
+
+        comprehension = ComprehensionResult(
+            intenciones=["search_pois"],
+            intencion_principal="search_pois",
+            confianza=0.8,
+            entidades=[ExtractedEntity(tipo="POI", valor="Pucón Outdoor", confianza=0.9)],
+            herramientas_necesarias=["search_pois"],
+            preguntas_pendientes=[],
+            actualizaciones_memoria=[],
+        )
+
+        with patch("app.services.ara_v2.answer_service.get_answer_service") as mock_ans, \
+             patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock()) as mock_search:
+            mock_ans.return_value.answer = AsyncMock(return_value={
+                "text": "Pucón Outdoor es una opción de actividades al aire libre.",
+                "evidence_level": "confirmed",
+                "poi_id": "123",
+            })
+
+            result = await orchestrator.execute(
+                comprehension,
+                session,
+                user,
+                db_session,
+                current_user_message="Qué es Pucón Outdoor?",
+            )
+
+        mock_search.assert_not_called()
+        assert result.status == "respond"
+        assert result.candidate_pois is None
+
+
+class TestPoiSelection:
+    @pytest.mark.asyncio
+    async def test_select_poi_by_uuid_confirms_and_stores_selection(self, db_session: AsyncSession):
+        orchestrator = ToolOrchestrator()
+        user = _make_user()
+        session = _make_session(user_id=user.id)
+        poi_id = uuid4()
+
+        mock_poi = MagicMock()
+        mock_poi.id = poi_id
+        mock_poi.name = "Pucón Outdoor"
+
+        comprehension = ComprehensionResult(
+            intenciones=["search_pois"],
+            intencion_principal="search_pois",
+            confianza=0.8,
+            entidades=[],
+            herramientas_necesarias=["search_pois"],
+            preguntas_pendientes=[],
+            actualizaciones_memoria=[],
+        )
+
+        with patch(
+            "app.services.ara_v2.tool_orchestrator.poi_repository.get_pois_by_ids",
+            new=AsyncMock(return_value=[mock_poi]),
+        ), patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock()) as mock_search:
+            result = await orchestrator.execute(
+                comprehension,
+                session,
+                user,
+                db_session,
+                current_user_message=f"Seleccionar POI {poi_id}",
+            )
+
+        mock_search.assert_not_called()
+        assert result.status == "respond"
+        assert result.candidate_pois == []
+        assert str(poi_id) in session.preferences_data["trip_draft"]["selected_poi_ids"]
 
 
 class TestSuggestReplacementTool:
@@ -282,7 +374,7 @@ class TestParallelExecution:
         mock_poi.id = uuid4()
 
         with patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock(return_value=[mock_poi])), \
-             patch("app.services.weather_service.get_forecast", new=AsyncMock(return_value="Soleado")):
+             patch("app.services.ara_v2.tool_orchestrator.get_weather_forecast", new=AsyncMock(return_value="Soleado")):
 
             result = await orchestrator.execute(comprehension, session, user, db_session)
 

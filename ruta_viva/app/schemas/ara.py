@@ -55,6 +55,18 @@ class AraSessionCreate(BaseModel):
 
 class AraMessageCreate(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> "AraMessageCreate":
+        if self.start_date is not None and self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+        if self.start_date is not None and self.end_date is not None:
+            trip_days = (self.end_date - self.start_date).days + 1
+            if trip_days > 7:
+                raise ValueError("Ara itinerary generation supports a maximum range of 7 days.")
+        return self
 
 
 class AraGenerateItineraryRequest(BaseModel):
@@ -98,6 +110,8 @@ class AraCandidatePOI(BaseModel):
 class AraSessionResponse(BaseModel):
     session_id: UUID
     status: str
+    start_date: date | None = None
+    end_date: date | None = None
     user_message: AraMessageResponse | None = None
     assistant_message: AraMessageResponse | None = None
     quick_replies: list[AraQuickReply] = Field(default_factory=list)

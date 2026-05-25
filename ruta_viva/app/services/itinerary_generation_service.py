@@ -313,12 +313,15 @@ async def generate_itinerary_from_request(
             detail="Weather forecast provider failed while generating the itinerary.",
         ) from exc
 
-    generated_raw = await llm_service.generate_itinerary(
-        enriched_query,
-        context_pois,
-        weather_forecast,
-        schedule_guidance,
-    )
+    try:
+        generated_raw = await llm_service.generate_itinerary(
+            enriched_query,
+            context_pois,
+            weather_forecast,
+            schedule_guidance,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     generated_itinerary = GeneratedItinerary.model_validate(generated_raw)
     generated_itinerary = normalize_generated_itinerary_times(generated_itinerary, payload)
     generated_itinerary = repair_duplicate_poi_steps(generated_itinerary, context_pois, payload)
@@ -329,13 +332,13 @@ async def generate_itinerary_from_request(
     if invalid_poi_ids:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The LLM returned POIs outside the provided context.",
+            detail="Ara recibió lugares fuera del contexto disponible. Intenta regenerar o ajustar la búsqueda.",
         )
 
     if not generated_itinerary.steps:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The LLM did not return any itinerary steps.",
+            detail="Ara no devolvió actividades para el itinerario. Intenta ajustar la búsqueda o ampliar las opciones.",
         )
 
     validate_generated_itinerary_rules(
@@ -792,6 +795,30 @@ def normalize_generated_itinerary_times(
     for step in generated_itinerary.steps:
         step.arrival_time = to_chile_timezone(step.arrival_time)
         step.departure_time = to_chile_timezone(step.departure_time)
+        if step.arrival_time is None:
+            ai_context = step.ai_context or {}
+            scheduled_time = parse_hhmm(ai_context.get("scheduled_time"))
+            if scheduled_time is not None:
+                raw_day_position = ai_context.get("day_position", ai_context.get("day_index", 0))
+                try:
+                    day_position = int(raw_day_position)
+                except (TypeError, ValueError):
+                    day_position = 0
+                day_position = max(0, min(day_position, trip_days(payload) - 1))
+                step.arrival_time = datetime.combine(
+                    payload.start_date + timedelta(days=day_position),
+                    scheduled_time,
+                    tzinfo=CHILE_TZ,
+                )
+
+        if step.arrival_time is not None and step.departure_time is None:
+            ai_context = step.ai_context or {}
+            try:
+                duration_minutes = int(ai_context.get("duration_minutes") or 90)
+            except (TypeError, ValueError):
+                duration_minutes = 90
+            duration_minutes = max(30, min(duration_minutes, 240))
+            step.departure_time = step.arrival_time + timedelta(minutes=duration_minutes)
 
     return generated_itinerary
 

@@ -6,17 +6,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.models.ara_message import AraMessage
 from app.models.ara_session import AraSession
 from app.models.tourist_profile import TouristProfile
 from app.models.user import User
-from app.schemas.ara import AraSessionResponse
+from app.repositories.ara_repository import AraRepository
+from app.schemas.ara import AraMessageCreate, AraMessageResponse, AraSessionCreate, AraSessionResponse
 from app.schemas.ara_comprehension import ComprehensionResult, ExtractedEntity, ToolExecutionResult
 from app.schemas.itinerary import ItineraryResponse, ItineraryStepResponse
+from app.services.ara_conversation_orchestrator import create_session_v2, handle_message_v2
 from app.services.ara_v2.conversation_processor import ConversationProcessor
 
-ToolExecutionResult.model_rebuild()
+ara_repository = AraRepository()
 
 
 def _make_user():
@@ -39,8 +43,270 @@ def _make_session(tourist_id=None):
     return session
 
 
+def _sessionmaker_from(session: AsyncSession):
+    return async_sessionmaker(
+        bind=session.bind,
+        class_=AsyncSession,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+
+async def _fake_process_user_message(
+    db: AsyncSession,
+    session: AraSession,
+    current_user: User,
+    user_message: str,
+) -> AraSessionResponse:
+    user_msg = AraMessage(session_id=session.id, role="user", content=user_message)
+    assistant_msg = AraMessage(session_id=session.id, role="assistant", content="Te ayudo con esa ruta.")
+    db.add_all([user_msg, assistant_msg])
+    await db.flush()
+    return AraSessionResponse(
+        session_id=session.id,
+        status=session.status,
+        user_message=AraMessageResponse(
+            id=user_msg.id,
+            session_id=session.id,
+            role="user",
+            content=user_msg.content,
+        ),
+        assistant_message=AraMessageResponse(
+            id=assistant_msg.id,
+            session_id=session.id,
+            role="assistant",
+            content=assistant_msg.content,
+        ),
+    )
+
+
 class TestCreateSessionAndSendMessages:
     """Test flujo basico: crear sesion + enviar mensajes."""
+
+    @pytest.mark.asyncio
+    async def test_create_session_v2_persists_session_for_next_request(self, db_session: AsyncSession):
+        """POST /sessions debe dejar la sesión visible para el siguiente request."""
+        user = _make_user()
+        user.email = f"persist-session-{uuid4()}@test.cl"
+        db_session.add(user)
+        await db_session.flush()
+
+        profile = _make_tourist_profile(user.id)
+        db_session.add(profile)
+        await db_session.flush()
+
+        fake_processor = MagicMock()
+        fake_processor.process_user_message = AsyncMock(side_effect=_fake_process_user_message)
+
+        with patch(
+            "app.services.ara_conversation_orchestrator.get_conversation_processor",
+            return_value=fake_processor,
+        ):
+            response = await create_session_v2(
+                db_session,
+                user,
+                AraSessionCreate(
+                    initial_message="Quiero armar una ruta por Villarrica",
+                    lat=-39.28,
+                    lon=-71.95,
+                    radius=5000,
+                ),
+            )
+
+        VerificationSession = _sessionmaker_from(db_session)
+        async with VerificationSession() as verification_db:
+            persisted = await ara_repository.get_session(verification_db, response.session_id, user.id)
+
+        assert persisted is not None
+        assert persisted.initial_query == "Quiero armar una ruta por Villarrica"
+        assert response.assistant_message is not None
+
+    @pytest.mark.asyncio
+    async def test_create_session_v2_processes_initial_message_without_lazy_loading_messages(
+        self,
+        db_session: AsyncSession,
+    ):
+        """La primera respuesta no debe intentar lazy-load de session.messages."""
+        user = _make_user()
+        user.email = f"initial-message-{uuid4()}@test.cl"
+        db_session.add(user)
+        await db_session.flush()
+
+        profile = _make_tourist_profile(user.id)
+        db_session.add(profile)
+        await db_session.flush()
+
+        mock_comprehension = ComprehensionResult(
+            intenciones=["general"],
+            intencion_principal="general",
+            confianza=0.8,
+            entidades=[],
+            herramientas_necesarias=[],
+            preguntas_pendientes=[],
+            actualizaciones_memoria=[],
+        )
+
+        mock_tool_result = ToolExecutionResult(
+            status="respond",
+            response_text="Te ayudo a planificar tu viaje por La Araucania.",
+        )
+
+        with patch("app.services.ara_v2.conversation_processor.get_memory_service") as mock_ms, \
+             patch("app.services.ara_v2.conversation_processor.get_comprensor") as mock_comp, \
+             patch("app.services.ara_v2.conversation_processor.get_tool_orchestrator") as mock_orch, \
+             patch("app.services.ara_v2.conversation_processor.get_response_generator") as mock_gen:
+
+            mock_ms.return_value.retrieve_relevant_facts = AsyncMock(return_value=[])
+            mock_ms.return_value.store_fact = AsyncMock()
+            mock_ms.return_value.update_tourist_profile_embedding = AsyncMock(return_value=False)
+            mock_comp.return_value.comprehend = AsyncMock(return_value=mock_comprehension)
+            mock_orch.return_value.execute = AsyncMock(return_value=mock_tool_result)
+            mock_gen.return_value.generate_response = AsyncMock(return_value={
+                "text": "Te ayudo a planificar tu viaje por La Araucania.",
+                "quick_replies": [],
+            })
+
+            response = await create_session_v2(
+                db_session,
+                user,
+                AraSessionCreate(
+                    initial_message="Quiero conocer Villarrica",
+                    lat=-39.28,
+                    lon=-71.95,
+                    radius=5000,
+                ),
+            )
+
+        assert response.assistant_message is not None
+        assert response.assistant_message.content == "Te ayudo a planificar tu viaje por La Araucania."
+
+        VerificationSession = _sessionmaker_from(db_session)
+        async with VerificationSession() as verification_db:
+            result = await verification_db.execute(
+                select(AraMessage)
+                .where(AraMessage.session_id == response.session_id)
+                .order_by(AraMessage.created_at.asc())
+            )
+            persisted_messages = list(result.scalars().all())
+
+        assert [message.role for message in persisted_messages] == ["user", "assistant"]
+        assert persisted_messages[0].content == "Quiero conocer Villarrica"
+
+    @pytest.mark.asyncio
+    async def test_create_session_v2_uses_ui_dates_and_filters_redundant_questions(
+        self,
+        db_session: AsyncSession,
+    ):
+        """Fechas seleccionadas en UI predominan y Ara no debe volver a pedirlas."""
+        user = _make_user()
+        user.email = f"ui-dates-{uuid4()}@test.cl"
+        db_session.add(user)
+        await db_session.flush()
+
+        profile = _make_tourist_profile(user.id)
+        db_session.add(profile)
+        await db_session.flush()
+
+        mock_comprehension = ComprehensionResult(
+            intenciones=["search_pois"],
+            intencion_principal="search_pois",
+            confianza=0.8,
+            entidades=[ExtractedEntity(tipo="destino", valor="Pucón", confianza=0.9)],
+            herramientas_necesarias=["search_pois"],
+            preguntas_pendientes=["¿Qué fechas tienes en mente?", "¿A qué destino quieres ir?"],
+            actualizaciones_memoria=[],
+        )
+        mock_tool_result = ToolExecutionResult(status="respond", response_text="Ya tengo las fechas para Pucón.")
+
+        with patch("app.services.ara_v2.conversation_processor.get_memory_service") as mock_ms, \
+             patch("app.services.ara_v2.conversation_processor.get_comprensor") as mock_comp, \
+             patch("app.services.ara_v2.conversation_processor.get_tool_orchestrator") as mock_orch, \
+             patch("app.services.ara_v2.conversation_processor.get_response_generator") as mock_gen:
+
+            mock_ms.return_value.retrieve_relevant_facts = AsyncMock(return_value=[])
+            mock_ms.return_value.store_fact = AsyncMock()
+            mock_ms.return_value.update_tourist_profile_embedding = AsyncMock(return_value=False)
+            mock_comp.return_value.comprehend = AsyncMock(return_value=mock_comprehension)
+            mock_orch.return_value.execute = AsyncMock(return_value=mock_tool_result)
+            mock_gen.return_value.generate_response = AsyncMock(return_value={
+                "text": "Ya tengo las fechas para Pucón.",
+                "quick_replies": [],
+            })
+
+            response = await create_session_v2(
+                db_session,
+                user,
+                AraSessionCreate(
+                    initial_message="Hola Ara, quiero organizar un viaje de tres días a Pucón",
+                    lat=-39.28,
+                    lon=-71.95,
+                    radius=5000,
+                    start_date=date(2026, 5, 25),
+                    end_date=date(2026, 5, 27),
+                ),
+            )
+
+        assert response.start_date == date(2026, 5, 25)
+        assert response.end_date == date(2026, 5, 27)
+
+        comprehend_kwargs = mock_comp.return_value.comprehend.call_args.kwargs
+        assert comprehend_kwargs["trip_draft"]["start_date"] == "2026-05-25"
+        assert comprehend_kwargs["trip_draft"]["end_date"] == "2026-05-27"
+
+        orchestrator_comprehension = mock_orch.return_value.execute.call_args.kwargs["comprehension"]
+        assert orchestrator_comprehension.preguntas_pendientes == []
+
+    @pytest.mark.asyncio
+    async def test_handle_message_v2_persists_messages_for_next_request(self, db_session: AsyncSession):
+        """POST /messages debe commitear mensajes del usuario y asistente."""
+        user = _make_user()
+        user.email = f"persist-messages-{uuid4()}@test.cl"
+        db_session.add(user)
+        await db_session.flush()
+
+        profile = _make_tourist_profile(user.id)
+        db_session.add(profile)
+        await db_session.flush()
+
+        fake_processor = MagicMock()
+        fake_processor.process_user_message = AsyncMock(side_effect=_fake_process_user_message)
+
+        with patch(
+            "app.services.ara_conversation_orchestrator.get_conversation_processor",
+            return_value=fake_processor,
+        ):
+            session_response = await create_session_v2(
+                db_session,
+                user,
+                AraSessionCreate(initial_message="Quiero viajar a Pucón", lat=-39.28, lon=-71.95),
+            )
+
+        fake_processor = MagicMock()
+        fake_processor.process_user_message = AsyncMock(side_effect=_fake_process_user_message)
+
+        with patch(
+            "app.services.ara_conversation_orchestrator.get_conversation_processor",
+            return_value=fake_processor,
+        ):
+            await handle_message_v2(
+                db_session,
+                user,
+                session_response.session_id,
+                AraMessageCreate(message="Me gustan las termas"),
+            )
+
+        VerificationSession = _sessionmaker_from(db_session)
+        async with VerificationSession() as verification_db:
+            result = await verification_db.execute(
+                select(AraMessage)
+                .where(AraMessage.session_id == session_response.session_id)
+                .order_by(AraMessage.created_at.asc())
+            )
+            persisted_messages = list(result.scalars().all())
+
+        assert [message.role for message in persisted_messages] == ["user", "assistant", "user", "assistant"]
+        assert persisted_messages[2].content == "Me gustan las termas"
+        assert persisted_messages[3].content == "Te ayudo con esa ruta."
 
     @pytest.mark.asyncio
     async def test_create_session_and_send_messages(self, db_session: AsyncSession):

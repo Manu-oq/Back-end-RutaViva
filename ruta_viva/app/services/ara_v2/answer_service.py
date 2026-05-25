@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +30,9 @@ class AnswerService:
         db: AsyncSession,
         comprehension: ComprehensionResult,
         session: AraSession,
+        current_user_message: str | None = None,
     ) -> dict[str, Any]:
-        user_question = self._extract_question(comprehension, session)
+        user_question = current_user_message or self._extract_question(comprehension, session)
         poi_name = self._extract_poi_name(comprehension, user_question)
 
         if not poi_name:
@@ -84,8 +86,9 @@ class AnswerService:
 
     def _extract_question(self, comprehension: ComprehensionResult, session: AraSession) -> str:
         """Extrae la pregunta del contexto."""
-        if session.messages:
-            for msg in reversed(session.messages):
+        messages = session.__dict__.get("messages") or []
+        if messages:
+            for msg in reversed(messages):
                 if msg.role == "user":
                     return msg.content
         return "Que sabes de este lugar?"
@@ -97,6 +100,16 @@ class AnswerService:
         pois = [e.valor for e in comprehension.entidades if e.tipo == "poi"]
         if pois:
             return pois[0]
+
+        for pattern in (
+            r"(?:qué|que)\s+es\s+(.+?)(?:\?|$)",
+            r"(?:qué|que)\s+sabes\s+de\s+(.+?)(?:\?|$)",
+            r"cu[eé]ntame\s+(?:sobre|de)\s+(.+?)(?:\?|$)",
+            r"vale\s+la\s+pena\s+(.+?)(?:\?|$)",
+        ):
+            match = re.search(pattern, user_question.strip(), flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip(" .¿?¡!")
 
         words = user_question.split()
         for w in words:

@@ -117,21 +117,38 @@ class ResponseGenerator:
     ) -> dict[str, Any]:
         pois = tool_result.candidate_pois or []
         destino = self._extract_destino(comprehension, session)
+        categorias = [e.valor for e in comprehension.entidades if e.tipo == "categoria"]
+        categoria_str = categorias[0] if categorias else None
 
         poi_names = [p.get("name", p.get("nombre", "Lugar")) for p in pois[:5]] if pois else []
         pois_text = ", ".join(poi_names) if poi_names else "varias opciones"
 
-        prompt = (
-            f"Encontre {len(pois)} opciones en {destino or 'la zona'}. "
-            f"Las principales son: {pois_text}. "
-            f"Genera un mensaje natural mencionando estas opciones y preguntando cual le interesa."
-        )
+        if categoria_str and pois:
+            prompt = (
+                f"Encontre {len(pois)} opciones de {categoria_str} en {destino or 'la zona'}. "
+                f"Las principales son: {pois_text}. "
+                f"Genera un mensaje natural mencionando estas opciones de {categoria_str} y preguntando cual le interesa."
+            )
+        elif pois:
+            prompt = (
+                f"Encontre {len(pois)} opciones en {destino or 'la zona'}. "
+                f"Las principales son: {pois_text}. "
+                f"Genera un mensaje natural mencionando estas opciones por nombre y preguntando cual le interesa."
+            )
+        else:
+            prompt = (
+                f"No encontre opciones especificas en {destino or 'la zona'}. "
+                f"Genera un mensaje amable sugiriendo que puede buscar con otros terminos o ampliar la busqueda."
+            )
 
         try:
             text = await self._call_gpt(prompt, comprehension.tono, session)
         except Exception:
             logger.exception("Failed to generate search response, using fallback")
-            text = self._get_fallback(tool_result)
+            if pois:
+                text = f"Encontre {len(pois)} opciones: {pois_text}. Cual te interesa?"
+            else:
+                text = self._get_fallback(tool_result)
 
         quick_replies = []
         if len(pois) <= 4:

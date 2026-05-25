@@ -8,6 +8,8 @@ Tu trabajo es ANALIZAR el mensaje del usuario y devolver UN SOLO JSON válido.
 REGLAS:
 1. Identifica TODAS las intenciones del usuario (puede haber varias).
 2. Extrae entidades: destinos, fechas, POIs, categorías, restricciones.
+   - entidades[].tipo debe estar SIEMPRE en minúscula. Usa "poi", nunca "POI".
+   - Cuando el usuario mencione tipos de negocio implícitamente ("restaurante", "hotel", "café", "pizzería", "termas"), extrae una entidad con tipo="categoria" y valor="gastronomía"/"alojamiento"/etc.
 3. Detecta preferencias y restricciones para guardar en memoria.
 4. Decide qué herramientas necesita el sistema:
    - search_pois: si menciona destino o quiere ver opciones
@@ -16,6 +18,8 @@ REGLAS:
    - answer_question: si pregunta sobre un POI específico
    - suggest_replacement: si quiere cambiar algo de un itinerario existente
 5. Si falta información CRÍTICA (destino, fechas, alojamiento), genera preguntas_pendientes.
+   - Si el contexto actual ya trae fechas seleccionadas, NO preguntes por fechas.
+   - Si el contexto actual ya trae destino o búsqueda inicial clara, NO preguntes por destino.
 6. sugerir_quick_replies SOLO cuando hay una decisión puntual (sí/no, opción A/B/C).
 
 FORMATO JSON OBLIGATORIO:
@@ -27,7 +31,7 @@ FORMATO JSON OBLIGATORIO:
   "rango_fechas": {"start": "2026-06-15", "end": "2026-06-17"},
   "herramientas_necesarias": ["search_pois"],
   "preguntas_pendientes": ["¿Hotel o cabaña?"],
-  "actualizaciones_memoria": [{"hecho": "viaja con familia", "categoria": "entidad", "confianza": 0.9}],
+  "actualizaciones_memoria": [{"hecho": "prefiere cabaña", "categoria": "alojamiento", "confianza": 0.9}],
   "sugerir_quick_replies": [{"label": "Hotel", "value": "hotel", "type": "selection"}],
   "tono": "entusiasta"
 }
@@ -36,6 +40,8 @@ RESTRICCIONES:
 - NO inventes destinos que no mencione el usuario.
 - NO inventes fechas si no las menciona.
 - Si no estás seguro, baja la confianza.
+- Categorías permitidas en actualizaciones_memoria.categoria: restriccion, preferencia, destino, entidad, horario, transporte, presupuesto, alojamiento.
+- Tipos permitidos en entidades[].tipo: destino, poi, fecha, categoria, restriccion, preferencia, transporte, horario, presupuesto.
 - NUNCA respondas texto fuera del JSON."""
 
 _GENERATION_SYSTEM = """Eres un planificador de viajes experto para el sur de Chile.
@@ -54,23 +60,23 @@ REGLAS DE GENERACIÓN:
 FORMATO DE RESPUESTA (JSON estricto):
 {
   "title": "string",
-  "days": [
+  "status": "planned",
+  "steps": [
     {
-      "day_index": 0,
-      "steps": [
-        {
-          "poi_id": "uuid",
-          "poi_name": "string",
-          "poi_role": "lodging|food|activity",
-          "scheduled_time": "HH:MM",
-          "duration_minutes": 60,
-          "notes": "string"
-        }
-      ]
+      "step_order": 1,
+      "poi_id": "uuid",
+      "arrival_time": "2026-06-15T09:00:00-04:00",
+      "departure_time": "2026-06-15T10:30:00-04:00",
+      "ai_context": {
+        "reason": "string",
+        "tips": "string",
+        "poi_role": "lodging|food|activity"
+      }
     }
   ]
 }
 
+No uses la forma days[].steps; devuelve todos los pasos en la lista raíz "steps".
 NUNCA responder texto fuera del JSON."""
 
 _ANSWER_QUESTION_SYSTEM = """Eres Ara, un asistente de viaje que responde preguntas sobre POIs y destinos del sur de Chile.
@@ -102,6 +108,11 @@ def build_comprehension_prompt(session_context: dict[str, Any]) -> str:
     ctx = session_context
     if ctx.get("initial_query"):
         context_parts.append(f"Búsqueda inicial: {ctx['initial_query']}")
+    if ctx.get("start_date") and ctx.get("end_date"):
+        context_parts.append(
+            f"Fechas ya seleccionadas en la interfaz: {ctx['start_date']} a {ctx['end_date']}. "
+            "No preguntes nuevamente por fechas salvo que el usuario pida cambiarlas."
+        )
     if ctx.get("turn_count") is not None:
         context_parts.append(f"Turno actual: {ctx['turn_count']}")
     if ctx.get("current_day_focus") is not None:
@@ -145,7 +156,15 @@ def build_generation_prompt(generation_context: dict[str, Any]) -> str:
     if pois:
         parts.append("\nPOIs disponibles:")
         for poi in pois:
-            parts.append(f"  - {poi.get('name', 'N/A')} ({poi.get('category', '?')}): {poi.get('description', '')[:100]}")
+            parts.append(
+                f"  - ID: {poi.get('id', 'N/A')} | Nombre: {poi.get('name', 'N/A')} "
+                f"| Categorías: {poi.get('category_ids', poi.get('category', '?'))} "
+                f"| Descripción: {str(poi.get('description', ''))[:100]}"
+            )
+        parts.append(
+            "\nIMPORTANTE: En cada step.poi_id usa exclusivamente uno de los UUID listados como ID. "
+            "Nunca pongas nombres de lugares, categorías ni texto como poi_id."
+        )
 
     return "\n".join(parts)
 

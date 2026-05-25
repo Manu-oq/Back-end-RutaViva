@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-if TYPE_CHECKING:
-    from app.schemas.itinerary import ItineraryResponse
+from app.schemas.itinerary import ItineraryResponse
 
 
 class MemoryFact(BaseModel):
     hecho: str = Field(..., description="Hecho memorizable extraído del mensaje")
-    categoria: str = Field(..., pattern="^(restriccion|preferencia|destino|entidad|horario|transporte|presupuesto)$")
+    categoria: str = Field(..., pattern="^(restriccion|preferencia|destino|entidad|horario|transporte|presupuesto|alojamiento)$")
     confianza: float = Field(..., ge=0.0, le=1.0)
+
+    @field_validator("categoria", mode="before")
+    @classmethod
+    def normalize_categoria(cls, value: str) -> str:
+        return str(value).strip().lower()
 
 
 class QuickReplySuggestion(BaseModel):
@@ -19,11 +23,21 @@ class QuickReplySuggestion(BaseModel):
     value: str = Field(..., description="Valor interno cuando el usuario toca")
     type: str = Field(default="refinement", pattern="^(refinement|selection|action|navigation|generate)$")
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: str) -> str:
+        return str(value).strip().lower()
+
 
 class ExtractedEntity(BaseModel):
     tipo: str = Field(..., pattern="^(destino|poi|fecha|categoria|restriccion|preferencia|transporte|horario|presupuesto)$")
     valor: str
     confianza: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    @field_validator("tipo", mode="before")
+    @classmethod
+    def normalize_tipo(cls, value: str) -> str:
+        return str(value).strip().lower()
 
 
 class DateRange(BaseModel):
@@ -52,6 +66,11 @@ class ComprehensionResult(BaseModel):
     sugerir_quick_replies: list[QuickReplySuggestion] | None = None
     tono: str = Field(default="neutro", pattern="^(entusiasta|neutro|informativo|empatico)$")
 
+    @field_validator("tono", mode="before")
+    @classmethod
+    def normalize_tono(cls, value: str) -> str:
+        return str(value).strip().lower()
+
 
 class ToolExecutionResult(BaseModel):
     status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error)$")
@@ -59,6 +78,9 @@ class ToolExecutionResult(BaseModel):
     quick_replies: list[QuickReplySuggestion] | None = None
     candidate_pois: list[dict] | None = None
     weather_forecast: str | None = None
-    itinerary: Optional["ItineraryResponse"] = None
+    itinerary: Optional[ItineraryResponse] = None
     context_payload: dict | None = None
     error: str | None = None
+
+
+ToolExecutionResult.model_rebuild()

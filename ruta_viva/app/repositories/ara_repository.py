@@ -30,7 +30,7 @@ class AraRepository(BaseRepository):
         end_date: date | None,
         intent_data: dict[str, Any],
         preferences_data: dict[str, Any],
-        candidate_poi_ids: list[UUID],
+        candidate_poi_ids: list[UUID] | None,
     ) -> AraSession:
         session = AraSession(
             tourist_id=tourist_id,
@@ -41,9 +41,14 @@ class AraRepository(BaseRepository):
             end_date=end_date,
             intent_data=intent_data,
             preferences_data=preferences_data,
-            candidate_poi_ids=candidate_poi_ids,
+            candidate_poi_ids=candidate_poi_ids or [],
         )
         session.set_coordinates(lat, lon)
+        # La sesion recien creada no pasa por get_session(... selectinload(messages)).
+        # En AsyncSession, acceder luego a session.messages puede disparar un lazy-load
+        # implicito y fallar con MissingGreenlet. Dejamos la relacion inicializada
+        # porque una sesion nueva siempre parte sin mensajes.
+        session.messages = []
         db.add(session)
         await db.flush()
         return session
