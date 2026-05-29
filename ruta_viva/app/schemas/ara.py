@@ -135,18 +135,3 @@ class AraGenerateItineraryResponse(BaseModel):
     session_id: UUID
     status: str
     itinerary: ItineraryResponse
-
-
-class AraGenerateItineraryAcceptedResponse(BaseModel):
-    session_id: UUID
-    status: str
-    generated_itinerary_id: UUID | None = None
-    detail: str
-
-
-class AraGenerationStatusResponse(BaseModel):
-    session_id: UUID
-    status: str
-    generated_itinerary_id: UUID | None = None
-    itinerary: ItineraryResponse | None = None
-    detail: str | None = None

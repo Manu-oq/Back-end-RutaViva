@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_optional_current_user
+from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models.poi import POI
 from app.models.user import User
@@ -206,7 +207,9 @@ async def list_my_pois(
 
 
 @router.get("/search", response_model=list[POIResponse])
+@limiter.limit("30/minute")
 async def search_nearby_pois(
+    request: Request,
     lat: float = Query(...),
     lon: float = Query(...),
     radius: float = Query(5000, gt=0),
@@ -231,7 +234,9 @@ async def search_nearby_pois(
 
 
 @router.get("/semantic-search", response_model=list[POIResponse])
+@limiter.limit("10/minute")
 async def semantic_search_pois(
+    request: Request,
     query: str = Query(...),
     lat: float = Query(...),
     lon: float = Query(...),

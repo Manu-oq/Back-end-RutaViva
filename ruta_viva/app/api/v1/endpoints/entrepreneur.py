@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_optional_current_user
+from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.poi import POI
 from app.models.user import User
@@ -18,8 +18,6 @@ from app.schemas.entrepreneur import (
     EntrepreneurPostUpdate,
     POIActivityItem,
     POIAnalyticsResponse,
-    POIVisitCreate,
-    POIVisitResponse,
     PinPostRequest,
     ReorderPostsRequest,
 )
@@ -124,36 +122,6 @@ async def delete_my_post(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.get("/{entrepreneur_id}/posts", response_model=list[EntrepreneurPostResponse])
-async def list_public_entrepreneur_posts(
-    entrepreneur_id: UUID,
-    db: AsyncSession = Depends(get_db),
-) -> list[EntrepreneurPostResponse]:
-    posts = await entrepreneur_repository.list_published_posts(db, entrepreneur_id)
-    return [_post_to_response(post) for post in posts]
-
-
-@router.post("/pois/{poi_id}/visit", response_model=POIVisitResponse, status_code=status.HTTP_201_CREATED)
-async def record_poi_visit(
-    poi_id: UUID,
-    payload: POIVisitCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_optional_current_user),
-) -> POIVisitResponse:
-    visit = await entrepreneur_repository.record_poi_visit(
-        db,
-        poi_id=poi_id,
-        visitor_id=current_user.id if current_user is not None else None,
-        visit_in=payload,
-    )
-    if visit is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="POI not found.")
-
-    await poi_repository.recalculate_confidence(db, poi_id)
-
-    return visit
 
 
 @router.get("/pois/{poi_id}/analytics", response_model=POIAnalyticsResponse)

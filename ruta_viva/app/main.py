@@ -24,6 +24,7 @@ from app.core.http_client import close_all as close_http_clients
 from app.core.rate_limit import limiter
 from app.db.session import get_db, init_db
 from app.models.user import User
+from slowapi.errors import RateLimitExceeded
 
 
 logger = logging.getLogger("ruta_viva.telemetry")
@@ -128,6 +129,17 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content=_error_payload(
+            error="RateLimitExceeded",
+            detail="Has enviado muchos mensajes muy rápido. Espera un momento y vuelve a intentarlo.",
+        ),
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error while processing %s %s", request.method, request.url.path)
@@ -158,18 +170,19 @@ async def telemetry_middleware(request: Request, call_next) -> Response:
     process_time_seconds = time.perf_counter() - start_time
     process_time_ms = process_time_seconds * 1000
 
-    response.headers["X-Process-Time"] = f"{process_time_seconds:.6f}"
+    if request.url.path != "/health":
+        response.headers["X-Process-Time"] = f"{process_time_seconds:.6f}"
 
-    status_text = _status_phrase(response.status_code)
+        status_text = _status_phrase(response.status_code)
 
-    logger.info(
-        "%s %s - %s %s - %.0fms",
-        request.method,
-        request.url.path,
-        response.status_code,
-        status_text,
-        process_time_ms,
-    )
+        logger.info(
+            "%s %s - %s %s - %.0fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            status_text,
+            process_time_ms,
+        )
 
     return response
 

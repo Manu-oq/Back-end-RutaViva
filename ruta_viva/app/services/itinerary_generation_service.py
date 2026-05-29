@@ -41,6 +41,17 @@ from app.services.poi_metadata_extractor import WEEKDAY_KEYS, parse_opening_hour
 NATURE_CATEGORY_IDS_SET = {1, 6, 7, 8, 9, 10, 12}
 CULTURE_CATEGORY_IDS_SET = {5, 11, 15}
 
+# Fine-grained nature subcategories to avoid grouping distinct experiences
+NATURE_SUBCATEGORY_GROUPS = {
+    "volcan": {8},        # Montañas/Volcanes/Miradores
+    "lago_rio_playa": {7}, # Lagos/Ríos/Playas
+    "termas": {9},         # Termas/Bienestar
+    "parque_reserva": {10}, # Parques/Reservas
+    "trekking": {6},       # Trekking/Senderismo
+    "aventura": {12},      # Aventura/Deportes
+    "naturaleza_general": {1},  # Naturaleza (catch-all)
+}
+
 
 def trip_days(payload: GenerateItineraryRequest) -> int:
     return (payload.end_date - payload.start_date).days + 1
@@ -372,6 +383,140 @@ async def generate_itinerary_from_request(
     )
 
 
+def repair_invalid_poi_ids(
+    generated_itinerary: GeneratedItinerary,
+    poi_objects: list[POIResponse],
+) -> GeneratedItinerary:
+    """Reemplaza poi_id inválidos con POIs válidos del contexto por nombre o categoría."""
+    from app.services.itinerary_generation_service import _normalize_text
+
+    valid_uuids = {str(poi.id) for poi in poi_objects}
+    by_name = {_normalize_text(poi.name): poi for poi in poi_objects}
+
+    for step in generated_itinerary.steps:
+        if str(step.poi_id) in valid_uuids:
+            continue
+
+        poi_name = (step.ai_context or {}).get("poi_name") if step.ai_context else None
+        if poi_name:
+            normalized = _normalize_text(poi_name)
+            for name, poi in by_name.items():
+                if normalized in name or name in normalized:
+                    step.poi_id = poi.id
+                    break
+
+        if str(step.poi_id) not in valid_uuids:
+            step_category = (step.ai_context or {}).get("category") if step.ai_context else None
+            for poi in poi_objects:
+                if str(poi.id) in valid_uuids:
+                    if step_category and poi.category_ids and str(step_category) in [str(c) for c in poi.category_ids]:
+                        step.poi_id = poi.id
+                        break
+
+    return generated_itinerary
+
+
+def _normalize_text(value: str) -> str:
+    import re
+    import unicodedata
+
+    normalized = unicodedata.normalize("NFKD", value or "")
+    without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", without_accents.lower()).strip()
+
+
+def repair_lodging_duplicates(
+    generated_itinerary: GeneratedItinerary,
+    context_pois: list[POIResponse],
+    payload: GenerateItineraryRequest,
+) -> GeneratedItinerary:
+    """Reemplaza lodging duplicados en el mismo día, manteniendo solo el último (check-in nocturno)."""
+    poi_by_id = {poi.id: poi for poi in context_pois}
+    used_ids = {step.poi_id for step in generated_itinerary.steps}
+
+    lodging_steps_by_date: dict[date, list] = {}
+    for step in generated_itinerary.steps:
+        if step.arrival_time is None:
+            continue
+        poi = poi_by_id.get(step.poi_id)
+        if poi is None:
+            continue
+        if LODGING_CATEGORY_ID in poi.category_ids:
+            lodging_steps_by_date.setdefault(step.arrival_time.date(), []).append(step)
+
+    for date_key, lodging_steps in lodging_steps_by_date.items():
+        if len(lodging_steps) <= 1:
+            continue
+
+        kept_lodging = lodging_steps[-1]
+
+        for step in lodging_steps[:-1]:
+            original_poi_id = step.poi_id
+            replacement = next(
+                (
+                    candidate
+                    for candidate in context_pois
+                    if candidate.id not in used_ids
+                    and LODGING_CATEGORY_ID not in candidate.category_ids
+                    and candidate_is_usable_for_slot(candidate, step, payload)
+                ),
+                None,
+            )
+            if replacement is not None:
+                replace_step_poi(step, replacement, repair_type="lodging_duplicate_removal", original_poi_id=original_poi_id)
+                used_ids.add(replacement.id)
+                used_ids.discard(original_poi_id)
+
+    return generated_itinerary
+
+
+def repair_latest_start_times(
+    generated_itinerary: GeneratedItinerary,
+    poi_objects: list[POIResponse],
+) -> GeneratedItinerary:
+    """Ajusta arrival_time de steps que exceden latest_recommended_start_time."""
+    poi_by_id = {str(p.id): p for p in poi_objects}
+
+    for step in generated_itinerary.steps:
+        if not step.arrival_time:
+            continue
+
+        poi = poi_by_id.get(str(step.poi_id))
+        if not poi:
+            continue
+
+        visit_rules = (poi.visit_rules or {}) if hasattr(poi, "visit_rules") else {}
+        if not visit_rules:
+            continue
+
+        latest_start_str = visit_rules.get("latest_recommended_start_time")
+        night_suitable = bool(visit_rules.get("night_suitable"))
+
+        if not latest_start_str or night_suitable:
+            continue
+
+        latest_start = parse_hhmm(latest_start_str)
+        if not latest_start:
+            continue
+
+        if step.arrival_time.time() > latest_start:
+            new_arrival = datetime.combine(
+                step.arrival_time.date(),
+                latest_start,
+                tzinfo=step.arrival_time.tzinfo,
+            )
+            duration = step.departure_time - step.arrival_time if step.departure_time else timedelta(hours=1)
+            step.arrival_time = new_arrival
+            step.departure_time = new_arrival + duration
+
+            ai_context = dict(step.ai_context or {})
+            ai_context["reason"] = "Ajusté el horario de esta parada para respetar la hora máxima recomendada de inicio."
+            ai_context["system_repair"] = {"type": "latest_start_time_adjustment"}
+            step.ai_context = ai_context
+
+    return generated_itinerary
+
+
 def parse_hhmm(value: str | None) -> time | None:
     if not value:
         return None
@@ -442,8 +587,11 @@ def primary_category_id(poi: POIResponse | None) -> int | None:
         return GASTRONOMY_CATEGORY_ID
     if LODGING_CATEGORY_ID in category_ids:
         return LODGING_CATEGORY_ID
-    if category_ids & NATURE_CATEGORY_IDS_SET:
-        return next(iter(category_ids & NATURE_CATEGORY_IDS_SET))
+    # Check fine-grained nature subcategories first (volcan != lago)
+    for subcat_ids in NATURE_SUBCATEGORY_GROUPS.values():
+        match = category_ids & subcat_ids
+        if match:
+            return next(iter(match))
     if category_ids & CULTURE_CATEGORY_IDS_SET:
         return next(iter(category_ids & CULTURE_CATEGORY_IDS_SET))
     return poi.category_ids[0]

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.bookmark import Bookmark
 from app.models.entrepreneur_post import EntrepreneurPost
@@ -232,62 +233,40 @@ class EntrepreneurRepository(BaseRepository):
     async def get_poi_analytics(self, db: AsyncSession, poi_id: UUID) -> POIAnalyticsResponse:
         now = datetime.now(timezone.utc)
         week_ago = now - timedelta(days=7)
+        this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month_end = this_month_start - timedelta(seconds=1)
+        last_month_start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        visits_count = await db.scalar(
-            select(func.count()).select_from(POIVisit).where(POIVisit.poi_id == poi_id)
-        )
+        visits_stmt = select(
+            func.count().label("total_visits"),
+            func.count().filter(POIVisit.created_at >= week_ago).label("weekly_visits"),
+            func.count().filter(POIVisit.created_at >= this_month_start).label("this_month_visits"),
+            func.count().filter(
+                and_(POIVisit.created_at >= last_month_start, POIVisit.created_at <= last_month_end)
+            ).label("last_month_visits"),
+        ).where(POIVisit.poi_id == poi_id)
+        visits_result = (await db.execute(visits_stmt)).one()
 
-        weekly_visits = await db.scalar(
-            select(func.count())
-            .select_from(POIVisit)
-            .where(and_(POIVisit.poi_id == poi_id, POIVisit.created_at >= week_ago))
-        )
+        reviews_stmt = select(
+            func.count(Review.id).label("reviews_count"),
+            func.coalesce(func.avg(Review.rating_stars), 0.0).label("avg_rating"),
+        ).where(Review.poi_id == poi_id)
+        reviews_result = (await db.execute(reviews_stmt)).one()
 
         favorites_count = await db.scalar(
             select(func.count()).select_from(Bookmark).where(Bookmark.poi_id == poi_id)
         )
 
-        review_stats = await db.execute(
-            select(func.count(Review.id), func.avg(Review.rating_stars)).where(Review.poi_id == poi_id)
-        )
-        reviews_count, avg_rating = review_stats.one()
-
-        this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        last_month_end = this_month_start - timedelta(seconds=1)
-        last_month_start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        this_month_visits = await db.scalar(
-            select(func.count())
-            .select_from(POIVisit)
-            .where(and_(POIVisit.poi_id == poi_id, POIVisit.created_at >= this_month_start))
-        )
-
-        last_month_visits = await db.scalar(
-            select(func.count())
-            .select_from(POIVisit)
-            .where(
-                and_(
-                    POIVisit.poi_id == poi_id,
-                    POIVisit.created_at >= last_month_start,
-                    POIVisit.created_at <= last_month_end,
-                )
-            )
-        )
-
-        lm = int(last_month_visits or 0)
-        tm = int(this_month_visits or 0)
-
-        if lm == 0:
-            monthly_growth = 1.0 if tm > 0 else 0.0
-        else:
-            monthly_growth = (tm - lm) / lm
+        lm = int(visits_result.last_month_visits or 0)
+        tm = int(visits_result.this_month_visits or 0)
+        monthly_growth = 1.0 if (lm == 0 and tm > 0) else 0.0 if lm == 0 else (tm - lm) / lm
 
         return POIAnalyticsResponse(
-            visits_count=int(visits_count or 0),
+            visits_count=int(visits_result.total_visits or 0),
             favorites_count=int(favorites_count or 0),
-            reviews_count=int(reviews_count or 0),
-            avg_rating=float(avg_rating) if avg_rating is not None else 0.0,
-            weekly_visits=int(weekly_visits or 0),
+            reviews_count=int(reviews_result.reviews_count or 0),
+            avg_rating=float(reviews_result.avg_rating) if reviews_result.avg_rating else 0.0,
+            weekly_visits=int(visits_result.weekly_visits or 0),
             monthly_growth=round(monthly_growth, 4),
         )
 
@@ -306,7 +285,11 @@ class EntrepreneurRepository(BaseRepository):
             )
 
         bookmarks = await db.execute(
-            select(Bookmark).where(Bookmark.poi_id == poi_id).order_by(Bookmark.created_at.desc()).limit(limit)
+            select(Bookmark)
+            .where(Bookmark.poi_id == poi_id)
+            .options(selectinload(Bookmark.tourist))
+            .order_by(Bookmark.created_at.desc())
+            .limit(limit)
         )
         for bookmark in bookmarks.scalars().all():
             tourist_name = bookmark.tourist.full_name if bookmark.tourist else None

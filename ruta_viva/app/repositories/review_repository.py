@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.poi import POI
 from app.models.review import Review
@@ -13,6 +14,21 @@ from app.schemas.review import ReviewCreate, ReviewResponse, ReviewSummaryRespon
 
 
 class ReviewRepository(BaseRepository):
+    async def _build_review_response(
+        self, db: AsyncSession, review: Review
+    ) -> ReviewResponse:
+        """Build ReviewResponse with author_name from tourist profile."""
+        author_name = review.tourist.full_name if review.tourist else None
+        return ReviewResponse(
+            id=review.id,
+            tourist_id=review.tourist_id,
+            author_name=author_name,
+            poi_id=review.poi_id,
+            rating_stars=review.rating_stars,
+            text_content=review.text_content,
+            created_at=review.created_at,
+        )
+
     async def create_review(
         self,
         db: AsyncSession,
@@ -44,12 +60,18 @@ class ReviewRepository(BaseRepository):
                 raise ValueError("You have already reviewed this POI.") from exc
             raise
 
-        return ReviewResponse.model_validate(review)
+        return await self._build_review_response(db, review)
 
     async def get_reviews_by_poi(self, db: AsyncSession, poi_id: UUID) -> list[ReviewResponse]:
-        stmt = select(Review).where(Review.poi_id == poi_id).order_by(Review.created_at.desc())
+        stmt = (
+            select(Review)
+            .where(Review.poi_id == poi_id)
+            .options(selectinload(Review.tourist))
+            .order_by(Review.created_at.desc())
+        )
         result = await db.execute(stmt)
-        return [ReviewResponse.model_validate(review) for review in result.scalars().all()]
+        reviews = list(result.scalars().all())
+        return [await self._build_review_response(db, review) for review in reviews]
 
     async def get_review_summary_by_poi(
         self,
@@ -116,7 +138,7 @@ class ReviewRepository(BaseRepository):
         await self._commit_or_rollback(db)
         await db.refresh(review)
 
-        return ReviewResponse.model_validate(review)
+        return await self._build_review_response(db, review)
 
     async def delete_review(
         self,

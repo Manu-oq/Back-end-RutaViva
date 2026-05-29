@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 
 class Token(BaseModel):
@@ -9,11 +9,11 @@ class Token(BaseModel):
 
 class TokenPayload(BaseModel):
     sub: str | None = None
+    type: str | None = None
     iat: int | None = None
     jti: str | None = None
     iss: str | None = None
 
 
 class RefreshTokenRequest(BaseModel):
-    email: EmailStr
-    password: str
+    refresh_token: str

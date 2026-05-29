@@ -15,7 +15,7 @@ services:
     volumes:
       - ./media:/app/media
       - ./app:/app/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
     depends_on:
       db:
         condition: service_healthy
@@ -33,9 +33,9 @@ services:
     container_name: rutaviva_db
     restart: always
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: rutaviva_db
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-rutaviva_db}
     ports:
       - "5432:5432"
     volumes:

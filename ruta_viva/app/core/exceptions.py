@@ -11,26 +11,15 @@ class AppError(Exception):
         super().__init__(self.detail)
 
 
-class NotFoundError(AppError):
-    status_code = 404
-    detail = "Resource not found."
-
-
 class PermissionError(AppError):
     status_code = 403
     detail = "You do not have permission to perform this action."
 
 
-class ValidationError(AppError):
-    status_code = 422
-    detail = "Validation failed."
-
-
-class ExternalServiceError(AppError):
-    status_code = 502
-    detail = "External service error."
-
-
-class ConcurrencyError(AppError):
+class ConflictError(AppError):
     status_code = 409
-    detail = "The resource was modified by another request. Please reload and try again."
+    detail = "The requested operation conflicts with the current resource state."
+
+
+class ItineraryNotEditableError(ConflictError):
+    detail = "Itinerary is no longer editable."

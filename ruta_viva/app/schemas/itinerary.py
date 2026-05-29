@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GenerateItineraryRequest(BaseModel):
-    query: str = Field(max_length=5000)
+    query: str = Field(max_length=15000)
     lat: float
     lon: float
     radius: float = Field(default=5000, gt=0)
@@ -105,6 +105,8 @@ class ItineraryResponse(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     status: str
+    is_past: bool = False
+    is_editable: bool = True
     steps: list[ItineraryStepResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
@@ -121,6 +123,9 @@ class ItineraryStepWeatherResponse(BaseModel):
     poi_id: UUID
     poi_name: str | None = None
     day_date: date | None = None
+    weather_available: bool = False
+    weather_status: Literal["available", "out_of_range", "not_applicable", "unavailable"] = "unavailable"
+    weather_message: str | None = None
     weather: ItineraryStepWeather | None = None
 
 

@@ -8,7 +8,7 @@ from passlib.context import CryptContext
 from app.core.config import settings
 
 
-pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt", "bcrypt_sha256"], deprecated=["bcrypt_sha256"])
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -19,7 +19,11 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(subject: str | Any, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    subject: str | Any,
+    expires_delta: timedelta | None = None,
+    token_type: str = "access",
+) -> str:
     if expires_delta is not None:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -28,6 +32,7 @@ def create_access_token(subject: str | Any, expires_delta: timedelta | None = No
     to_encode = {
         "exp": expire,
         "sub": str(subject),
+        "type": token_type,
         "iat": int(datetime.now(timezone.utc).timestamp()),
         "jti": str(uuid4()),
         "iss": "ruta-viva",
@@ -35,7 +40,11 @@ def create_access_token(subject: str | Any, expires_delta: timedelta | None = No
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def create_refresh_token(subject: str | Any, expires_delta: timedelta | None = None) -> str:
+def create_refresh_token(
+    subject: str | Any,
+    expires_delta: timedelta | None = None,
+    token_type: str = "refresh",
+) -> str:
     if expires_delta is not None:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
@@ -44,6 +53,7 @@ def create_refresh_token(subject: str | Any, expires_delta: timedelta | None = N
     to_encode = {
         "exp": expire,
         "sub": str(subject),
+        "type": token_type,
         "iat": int(datetime.now(timezone.utc).timestamp()),
         "jti": str(uuid4()),
         "iss": "ruta-viva",

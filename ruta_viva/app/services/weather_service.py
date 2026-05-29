@@ -5,7 +5,6 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-import httpx
 from cachetools import TTLCache
 
 from app.core.config import settings
@@ -60,23 +59,48 @@ def _build_day_forecast(items: list[dict[str, Any]]) -> WeatherDailyForecast:
     if weather_items:
         description = weather_items[0].get("description", description)
 
+    # Compute min/max from daytime hours (06:00-21:00)
     daytime_temps = [
         float(item["main"]["temp"])
         for item in items
         if 6 <= _parse_forecast_datetime(item).hour <= 21
     ]
-    max_temp = round(max(daytime_temps)) if daytime_temps else round(float(representative.get("main", {}).get("temp", 0)))
+    daytime_mins = [
+        float(item["main"]["temp_min"])
+        for item in items
+        if 6 <= _parse_forecast_datetime(item).hour <= 21 and "temp_min" in item.get("main", {})
+    ]
+    daytime_maxs = [
+        float(item["main"]["temp_max"])
+        for item in items
+        if 6 <= _parse_forecast_datetime(item).hour <= 21 and "temp_max" in item.get("main", {})
+    ]
 
+    max_temp = round(max(daytime_temps)) if daytime_temps else round(float(representative.get("main", {}).get("temp", 0)))
+    min_temp = round(min(daytime_mins)) if daytime_mins else None
+    max_temp_explicit = round(max(daytime_maxs)) if daytime_maxs else None
+
+    # Precipitation probability (max across all blocks)
     pop_values = [float(item.get("pop", 0)) for item in items]
     max_pop = max(pop_values, default=0)
 
+    # Precipitation amount in mm (sum of rain + snow across all 3h blocks)
+    total_precip_mm = 0.0
+    for item in items:
+        rain_3h = float(item.get("rain", {}).get("3h", 0))
+        snow_3h = float(item.get("snow", {}).get("3h", 0))
+        total_precip_mm += rain_3h + snow_3h
+    precip_mm = round(total_precip_mm, 1) if total_precip_mm > 0 else None
+
     logger.debug(
-        "Forecast %s: raw_daytime_temps=%s max_temp=%d°C desc=%s pop=%d%%",
+        "Forecast %s: raw_daytime_temps=%s min=%s max=%s°C desc=%s pop=%d%% precip=%.1fmm",
         representative_dt.date(),
         daytime_temps,
-        max_temp,
+        min_temp,
+        max_temp_explicit or max_temp,
         description.capitalize(),
         round(max_pop * 100),
+        total_precip_mm,
     )
 
     return WeatherDailyForecast(
@@ -84,16 +108,29 @@ def _build_day_forecast(items: list[dict[str, Any]]) -> WeatherDailyForecast:
         label=f"{day_name} {day_number}",
         description=description.capitalize(),
         temperature_c=max_temp,
+        min_temp_c=min_temp,
+        max_temp_c=max_temp_explicit,
         precipitation_probability=round(max_pop * 100),
+        precipitation_mm=precip_mm,
     )
 
 
 def _format_day_summary(day: WeatherDailyForecast) -> str:
-    rain_suffix = ""
-    if day.precipitation_probability >= 20:
-        rain_suffix = f", probabilidad de lluvia {day.precipitation_probability}%"
+    temp_str = f"{day.temperature_c}°C"
+    if day.min_temp_c is not None and day.max_temp_c is not None:
+        temp_str = f"{day.min_temp_c}°C / {day.max_temp_c}°C"
 
-    return f"{day.label}: {day.description}, {day.temperature_c}°C{rain_suffix}."
+    rain_parts = []
+    if day.precipitation_probability >= 20:
+        rain_parts.append(f"probabilidad de lluvia {day.precipitation_probability}%")
+    if day.precipitation_mm is not None and day.precipitation_mm > 0:
+        rain_parts.append(f"{day.precipitation_mm} mm de lluvia")
+
+    rain_suffix = ""
+    if rain_parts:
+        rain_suffix = f", {', '.join(rain_parts)}"
+
+    return f"{day.label}: {day.description}, {temp_str}{rain_suffix}."
 
 
 def format_forecast_summary(daily_forecast: list[WeatherDailyForecast]) -> str:

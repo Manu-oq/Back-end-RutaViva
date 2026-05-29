@@ -269,18 +269,22 @@ async def search_candidate_pois(
     radius: float | None = None,
     limit: int = 12,
     embedding_cache: EmbeddingCache | None = None,
+    category_ids: list[int] | None = None,
+    query_embedding: list[float] | None = None,
 ) -> list:
     if lat is None or lon is None:
         return []
 
-    if embedding_service is None:
-        from app.services.embedding_service import get_embedding_service
-        embedding_service = get_embedding_service()
+    if query_embedding is None:
+        if embedding_service is None:
+            from app.services.embedding_service import get_embedding_service
+            embedding_service = get_embedding_service()
 
-    if embedding_cache is not None:
-        query_embedding = await embedding_cache.get_embedding(payload_query)
-    else:
-        query_embedding = await embedding_service.get_embedding(payload_query)
+        if embedding_cache is not None:
+            query_embedding = await embedding_cache.get_embedding(payload_query)
+        else:
+            query_embedding = await embedding_service.get_embedding(payload_query)
+
     return await poi_repository.search_hybrid(
         db,
         lat=lat,
@@ -289,6 +293,7 @@ async def search_candidate_pois(
         query_embedding=query_embedding,
         user_interests_embedding=current_user.tourist_profile.interests_embedding if current_user.tourist_profile else None,
         limit=limit,
+        category_ids=category_ids,
     )
 
 
@@ -306,7 +311,7 @@ async def search_generation_context_with_fallbacks(
     strict_destination: bool = False,
     embedding_cache: EmbeddingCache | None = None,
 ) -> list:
-    radius_sequence = (radius,) if strict_destination else (radius, 30_000, 60_000, 100_000)
+    radius_sequence = (radius,) if strict_destination else (radius, 20_000)
     radii = []
     for candidate_radius in radius_sequence:
         if candidate_radius not in radii:
@@ -336,31 +341,5 @@ async def search_generation_context_with_fallbacks(
         )
         if len(gathered) >= min(MIN_ITINERARY_CONTEXT_POIS, limit):
             return gathered
-
-    if not strict_destination and len(gathered) < 5:
-        fallback_text = "turismo general naturaleza gastronomía cultura descanso La Araucanía"
-        if embedding_cache is not None:
-            generic_embedding = await embedding_cache.get_embedding(fallback_text)
-        else:
-            generic_embedding = await embedding_service.get_embedding(fallback_text)
-        for candidate_radius in radii:
-            gathered = merge_unique_context_pois(
-                gathered,
-                await poi_repository.search_hybrid(
-                    db,
-                    lat=lat,
-                    lon=lon,
-                    radius_meters=candidate_radius,
-                    query_embedding=generic_embedding,
-                    user_interests_embedding=current_user.tourist_profile.interests_embedding
-                    if current_user.tourist_profile
-                    else None,
-                    profile_weight=0.1,
-                    limit=limit,
-                ),
-                max_pois=limit,
-            )
-            if len(gathered) >= min(8, limit):
-                break
 
     return gathered

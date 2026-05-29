@@ -79,37 +79,60 @@ class ConversationProcessor:
         self._apply_comprehension_to_session(session, comprehension, user_message)
         self._filter_resolved_pending_questions(session, comprehension)
 
-        # PASO 4: Guardar hechos nuevos
-        for fact in comprehension.actualizaciones_memoria:
+        # PASO 4: Guardar hechos nuevos (batch)
+        if comprehension.actualizaciones_memoria:
+            facts_list = [
+                {
+                    "hecho": f.hecho,
+                    "categoria": f.categoria,
+                    "confianza": f.confianza,
+                }
+                for f in comprehension.actualizaciones_memoria
+            ]
             try:
-                await memory_service.store_fact(
-                    db=db,
-                    tourist_id=tourist_id,
-                    session_id=session.id,
-                    hecho=fact.hecho,
-                    categoria=fact.categoria,
-                    confianza=fact.confianza,
+                await memory_service.store_facts_batch(
+                    db=db, tourist_id=tourist_id, session_id=session.id, facts=facts_list,
                 )
-                logger.info("Memoria guardada: %s (%s, confianza=%.2f)", fact.hecho, fact.categoria, fact.confianza)
+                logger.info(
+                    "Memoria guardada (batch): %d facts para tourist=%s",
+                    len(facts_list),
+                    tourist_id,
+                )
             except Exception:
                 logger.warning(
-                    "Failed to store fact for tourist=%s: %s. Continuing without embedding.",
+                    "Failed to store facts batch for tourist=%s, falling back to individual.",
                     tourist_id,
-                    fact.hecho,
                 )
-                try:
-                    fact_obj = ConversationMemory(
-                        tourist_id=tourist_id,
-                        session_id=session.id,
-                        hecho=fact.hecho,
-                        categoria=fact.categoria,
-                        confianza=fact.confianza,
-                        embedding=None,
-                    )
-                    db.add(fact_obj)
-                    await db.flush()
-                except Exception:
-                    logger.error("Failed to store fact even without embedding: %s", fact.hecho)
+                for fact in comprehension.actualizaciones_memoria:
+                    try:
+                        await memory_service.store_fact(
+                            db=db,
+                            tourist_id=tourist_id,
+                            session_id=session.id,
+                            hecho=fact.hecho,
+                            categoria=fact.categoria,
+                            confianza=fact.confianza,
+                        )
+                        logger.info("Memoria guardada: %s (%s, confianza=%.2f)", fact.hecho, fact.categoria, fact.confianza)
+                    except Exception:
+                        logger.warning(
+                            "Failed to store fact for tourist=%s: %s. Continuing without embedding.",
+                            tourist_id,
+                            fact.hecho,
+                        )
+                        try:
+                            fact_obj = ConversationMemory(
+                                tourist_id=tourist_id,
+                                session_id=session.id,
+                                hecho=fact.hecho,
+                                categoria=fact.categoria,
+                                confianza=fact.confianza,
+                                embedding=None,
+                            )
+                            db.add(fact_obj)
+                            await db.flush()
+                        except Exception:
+                            logger.error("Failed to store fact even without embedding: %s", fact.hecho)
 
         # PASO 5: Actualizar perfil semantico si es preferencia fuerte
         for fact in comprehension.actualizaciones_memoria:
@@ -123,7 +146,23 @@ class ConversationProcessor:
                 except Exception:
                     logger.warning("Failed to update profile embedding for tourist=%s", tourist_id)
 
-        # PASO 6: Ejecutar herramientas
+        # PASO 6: Persistir mensaje del usuario ANTES de ejecutar herramientas
+        user_msg = await self._add_message(db, session, "user", user_message)
+
+        # PASO 6.5: Geocodificar destino mencionado
+        destinos = [e.valor for e in comprehension.entidades if e.tipo == "destino"]
+        if destinos:
+            from app.services.ara_v2.geocoding_service import geocode_destination
+            coords = await geocode_destination(destinos[0])
+            if coords:
+                lat, lon = coords
+                session.set_coordinates(lat, lon)
+                preferences = dict(session.preferences_data or {})
+                preferences["geocoded_destination"] = {"name": destinos[0], "lat": lat, "lon": lon}
+                session.preferences_data = preferences
+                logger.info("Destino geocodificado: %s → (%.4f, %.4f)", destinos[0], lat, lon)
+
+        # PASO 7: Ejecutar herramientas
         orchestrator = get_tool_orchestrator()
         tool_result = await orchestrator.execute(
             comprehension=comprehension,
@@ -133,7 +172,36 @@ class ConversationProcessor:
             current_user_message=user_message,
         )
 
-        # PASO 7: Generar respuesta
+        # PASO 8: Si la intención es build_itinerary con fechas, activar SSE y retornar
+        if "build_itinerary" in comprehension.herramientas_necesarias and session.start_date and session.end_date:
+            stream_url = f"/api/v1/ara/sessions/{session.id}/generate-itinerary/stream"
+            assistant_content = "Perfecto, estoy armando tu itinerario. Puedes seguir usando la app mientras trabajo en ello."
+            quick_reply_qr = AraQuickReply(id="qr_progress", label="Ver progreso", value="ver_progreso", type="navigation")
+
+            # Persistir el mensaje del asistente ANTES de retornar
+            assistant_msg = await self._add_message(
+                db, session, "assistant",
+                assistant_content,
+                quick_replies=[quick_reply_qr.model_dump(mode="json")],
+            )
+
+            # Actualizar status de la sesión en DB
+            session.status = "ready_to_generate"
+            await db.flush()
+
+            return AraSessionResponse(
+                session_id=session.id,
+                status="ready_to_generate",
+                start_date=session.start_date,
+                end_date=session.end_date,
+                user_message=self._to_message_response(user_msg),
+                assistant_message=self._to_message_response(assistant_msg),
+                quick_replies=[quick_reply_qr],
+                candidate_pois=[],
+                progress={"stream_url": stream_url, "generation_status": "starting"},
+            )
+
+        # PASO 9: Generar respuesta
         response_gen = get_response_generator()
         response = await response_gen.generate_response(
             comprehension=comprehension,
@@ -141,8 +209,7 @@ class ConversationProcessor:
             session=session,
         )
 
-        # PASO 8: Persistir mensajes y devolver respuesta
-        user_msg = await self._add_message(db, session, "user", user_message)
+        # PASO 10: Persistir respuesta del asistente y devolver
         assistant_msg = await self._add_message(
             db, session, "assistant",
             response["text"],
@@ -368,8 +435,8 @@ class ConversationProcessor:
                     distance_meters=poi.get("distance_meters"),
                     poi_role=poi.get("poi_role"),
                 ))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to convert POI to AraCandidatePOI: %s", exc)
         return result
 
 

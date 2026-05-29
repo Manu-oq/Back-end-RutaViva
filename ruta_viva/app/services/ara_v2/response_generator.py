@@ -29,12 +29,12 @@ Alojamiento: {alojamiento}
 Preferencias: {preferencias}"""
 
 _FALLBACKS = {
-    "generate": "Tu itinerario esta listo. Podes verlo en la app.",
-    "search": "Encontre algunas opciones. Queres que te las muestre?",
+    "generate": "Tu itinerario esta listo. Puedes verlo en la app.",
+    "search": "Encontre algunas opciones. Quieres que te las muestro?",
     "respond": "Buena pregunta. Te respondo con lo que tengo registrado.",
     "clarify": None,
     "replace": "Aqui tienes opciones para cambiar ese paso.",
-    "error": "Ups, algo salio mal. Queres que lo intente de nuevo?",
+    "error": "Algo salio mal. Quieres que lo intente de nuevo?",
 }
 
 
@@ -60,9 +60,12 @@ class ResponseGenerator:
             return await self._generate_search_response(comprehension, tool_result, session)
 
         if status == "respond" and tool_result.response_text:
+            quick_replies = self._build_quick_replies(tool_result.quick_replies)
+            if not quick_replies:
+                quick_replies = self._contextual_quick_replies(session)
             return {
                 "text": tool_result.response_text,
-                "quick_replies": [],
+                "quick_replies": quick_replies,
             }
 
         if status == "clarify":
@@ -74,6 +77,12 @@ class ResponseGenerator:
         if status == "error":
             return {
                 "text": self._get_fallback(tool_result),
+                "quick_replies": [],
+            }
+
+        if status == "itinerary_pending":
+            return {
+                "text": "Estoy armando tu itinerario personalizado. Un momento...",
                 "quick_replies": [],
             }
 
@@ -120,7 +129,7 @@ class ResponseGenerator:
         categorias = [e.valor for e in comprehension.entidades if e.tipo == "categoria"]
         categoria_str = categorias[0] if categorias else None
 
-        poi_names = [p.get("name", p.get("nombre", "Lugar")) for p in pois[:5]] if pois else []
+        poi_names = [self._poi_name(p) for p in pois[:5]] if pois else []
         pois_text = ", ".join(poi_names) if poi_names else "varias opciones"
 
         if categoria_str and pois:
@@ -156,8 +165,8 @@ class ResponseGenerator:
                 quick_replies.append(
                     AraQuickReply(
                         id=f"qr_poi_{i}",
-                        label=poi.get("name", poi.get("nombre", f"Opcion {i+1}"))[:30],
-                        value=str(poi.get("id", i)),
+                        label=self._poi_name(poi)[:30],
+                        value=str(self._poi_id(poi, i)),
                         type="selection",
                     )
                 )
@@ -171,7 +180,7 @@ class ResponseGenerator:
         session: AraSession,
     ) -> dict[str, Any]:
         alternatives = tool_result.candidate_pois or []
-        alt_names = [a.get("name", a.get("nombre", "Lugar")) for a in alternatives[:3]]
+        alt_names = [self._poi_name(a) for a in alternatives[:3]]
         alts_text = ", ".join(alt_names) if alt_names else "varias alternativas"
 
         prompt = (
@@ -190,13 +199,25 @@ class ResponseGenerator:
             quick_replies.append(
                 AraQuickReply(
                     id=f"qr_alt_{i}",
-                    label=alt.get("name", alt.get("nombre", f"Alt {i+1}"))[:30],
-                    value=str(alt.get("id", i)),
+                    label=self._poi_name(alt)[:30],
+                    value=str(self._poi_id(alt, i)),
                     type="selection",
                 )
             )
 
         return {"text": text, "quick_replies": quick_replies}
+
+    @staticmethod
+    def _poi_name(poi: Any) -> str:
+        if isinstance(poi, dict):
+            return poi.get("name", poi.get("nombre", "Lugar"))
+        return getattr(poi, "name", getattr(poi, "nombre", "Lugar")) or "Lugar"
+
+    @staticmethod
+    def _poi_id(poi: Any, fallback: int) -> str | int:
+        if isinstance(poi, dict):
+            return poi.get("id", fallback)
+        return getattr(poi, "id", fallback)
 
     @staticmethod
     def _generate_clarify_response(
@@ -208,12 +229,16 @@ class ResponseGenerator:
         return {"text": text, "quick_replies": quick_replies}
 
     async def _call_gpt(self, prompt: str, tono: str, session: AraSession) -> str:
+        # Escape braces in user-derived values to prevent .format() crashes
+        def _escape(s: str) -> str:
+            return s.replace("{", "{{").replace("}", "}}")
+
         system_prompt = _SYSTEM_PROMPT.format(
             tono=tono or "neutro",
-            destino=self._extract_destino_from_session(session) or "La Araucania",
-            fechas=self._extract_fechas(session) or "Por definir",
-            alojamiento=self._extract_alojamiento(session) or "Por definir",
-            preferencias=self._extract_preferencias(session) or "Sin preferencias especificadas",
+            destino=_escape(self._extract_destino_from_session(session) or "La Araucania"),
+            fechas=_escape(self._extract_fechas(session) or "Por definir"),
+            alojamiento=_escape(self._extract_alojamiento(session) or "Por definir"),
+            preferencias=_escape(self._extract_preferencias(session) or "Sin preferencias especificadas"),
         )
 
         response = await self._client.chat.completions.create(
@@ -242,14 +267,33 @@ class ResponseGenerator:
         ]
 
     @staticmethod
+    def _contextual_quick_replies(session: AraSession) -> list[AraQuickReply]:
+        """Generate contextual quick replies based on session state."""
+        replies = []
+        replies.append(AraQuickReply(id="qr_search", label="Buscar más lugares", value="buscar_mas", type="action"))
+
+        if session.start_date and session.end_date:
+            replies.append(AraQuickReply(id="qr_itinerary", label="Armar itinerario", value="generar_itinerario", type="generate"))
+        else:
+            replies.append(AraQuickReply(id="qr_dates", label="Definir fechas", value="definir_fechas", type="action"))
+
+        prefs = session.preferences_data or {}
+        trip_draft = prefs.get("trip_draft") or {}
+        lodging = trip_draft.get("lodging") or prefs.get("lodging")
+        if not lodging:
+            replies.append(AraQuickReply(id="qr_lodging", label="Buscar alojamiento", value="buscar_alojamiento", type="action"))
+
+        return replies
+
+    @staticmethod
     def _get_fallback(tool_result: ToolExecutionResult) -> str:
         if tool_result.status == "clarify" and tool_result.response_text:
             return tool_result.response_text
-        return _FALLBACKS.get(tool_result.status, "Entendido. En que mas puedo ayudarte?")
+        return _FALLBACKS.get(tool_result.status, "Entendido. En qué más puedo ayudarte?")
 
     @staticmethod
     def _get_fallback_simple() -> str:
-        return "Entendido. En que mas puedo ayudarte?"
+        return "Entendido. En qué más puedo ayudarte?"
 
     @staticmethod
     def _extract_destino(comprehension: ComprehensionResult, session: AraSession) -> str | None:

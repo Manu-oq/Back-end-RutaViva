@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
-
 from app.core.http_client import get_client
 from app.schemas.geocoding import GeocodingResult
 

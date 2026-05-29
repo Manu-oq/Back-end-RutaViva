@@ -126,19 +126,12 @@ class TestBuildItineraryTool:
         mock_itinerary = MagicMock()
         mock_itinerary.id = uuid4()
 
-        with patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock(return_value=[mock_poi])), \
-             patch("app.services.ara_v2.tool_orchestrator.get_itinerary_generator") as mock_gen, \
-             patch("app.services.ara_v2.tool_orchestrator.validate_generated_itinerary_rules", return_value={"days": []}), \
-             patch("app.services.ara_v2.tool_orchestrator.itinerary_repository") as mock_repo, \
-             patch("app.services.ara_v2.tool_orchestrator.build_schedule_guidance", return_value=""):
-
-            mock_gen.return_value.generate_itinerary = AsyncMock(return_value={"days": []})
-            mock_repo.create_generated_itinerary = AsyncMock(return_value=mock_itinerary)
+        with patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock(return_value=[mock_poi])):
 
             result = await orchestrator.execute(comprehension, session, user, db_session)
 
-            assert result.status == "generate"
-            assert result.itinerary is not None
+            assert result.status == "itinerary_pending"
+            assert "itinerario" in result.response_text.lower()
 
     @pytest.mark.asyncio
     async def test_build_itinerary_without_pois(self, db_session: AsyncSession):
@@ -171,22 +164,13 @@ class TestBuildItineraryTool:
         mock_poi.image_url = None
         mock_poi.distance_meters = None
         mock_poi.poi_role = "activity"
-        mock_itinerary = MagicMock()
-        mock_itinerary.id = uuid4()
 
-        with patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock(return_value=[mock_poi])), \
-             patch("app.services.ara_v2.tool_orchestrator.get_itinerary_generator") as mock_gen, \
-             patch("app.services.ara_v2.tool_orchestrator.validate_generated_itinerary_rules", return_value={"days": []}), \
-             patch("app.services.ara_v2.tool_orchestrator.itinerary_repository") as mock_repo, \
-             patch("app.services.ara_v2.tool_orchestrator.build_schedule_guidance", return_value=""):
-
-            mock_gen.return_value.generate_itinerary = AsyncMock(return_value={"days": []})
-            mock_repo.create_generated_itinerary = AsyncMock(return_value=mock_itinerary)
+        with patch("app.services.ara_v2.tool_orchestrator.search_candidate_pois", new=AsyncMock(return_value=[mock_poi])):
 
             result = await orchestrator.execute(comprehension, session, user, db_session)
 
-            assert result.status == "generate"
-            assert result.candidate_pois is not None
+            assert result.status == "itinerary_pending"
+            assert "itinerario" in result.response_text.lower()
 
 
 class TestAnswerQuestionTool:
@@ -319,7 +303,7 @@ class TestSuggestReplacementTool:
             actualizaciones_memoria=[],
         )
 
-        with patch("app.services.ara_itinerary_generation.build_step_replacement_context", new=AsyncMock(return_value=None)):
+        with patch("app.services.ara_replacement_service.build_step_replacement_context", new=AsyncMock(return_value=None)):
             result = await orchestrator.execute(comprehension, session, user, db_session)
 
             assert result.status in ("replace", "error")

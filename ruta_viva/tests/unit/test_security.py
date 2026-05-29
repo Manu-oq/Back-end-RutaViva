@@ -6,7 +6,7 @@ import pytest
 from jose import jwt
 
 from app.core.config import settings
-from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
 
 
 class TestGetPasswordHash:
@@ -47,6 +47,7 @@ class TestCreateAccessToken:
         token = create_access_token(subject="user-123")
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         assert payload["sub"] == "user-123"
+        assert payload["type"] == "access"
 
     def test_token_contains_exp_claim(self) -> None:
         token = create_access_token(subject="user-123")
@@ -58,3 +59,11 @@ class TestCreateAccessToken:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         assert payload["sub"] == "user-123"
         assert "exp" in payload
+
+
+class TestCreateRefreshToken:
+    def test_token_contains_refresh_type(self) -> None:
+        token = create_refresh_token(subject="user-123")
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        assert payload["sub"] == "user-123"
+        assert payload["type"] == "refresh"

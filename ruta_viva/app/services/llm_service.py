@@ -171,6 +171,7 @@ def _normalize_step_poi_ids(steps: list[dict], context_pois: list[POIResponse] |
     if not context_pois:
         return steps
 
+    valid_uuids = {str(poi.id) for poi in context_pois}
     by_name = {_normalize_text(poi.name): str(poi.id) for poi in context_pois if getattr(poi, "name", None)}
     normalized_steps = []
     for raw_step in steps:
@@ -179,7 +180,27 @@ def _normalize_step_poi_ids(steps: list[dict], context_pois: list[POIResponse] |
         step = dict(raw_step)
         raw_poi_id = step.get("poi_id")
         if _is_uuid(raw_poi_id):
-            normalized_steps.append(step)
+            poi_id_str = str(raw_poi_id)
+            if poi_id_str in valid_uuids:
+                normalized_steps.append(step)
+            else:
+                candidate_name = step.get("poi_name") or step.get("name") or step.get("title") or ""
+                normalized_name = _normalize_text(str(candidate_name))
+                matched_id = by_name.get(normalized_name)
+
+                if not matched_id and normalized_name:
+                    for name, poi_id in by_name.items():
+                        if normalized_name in name or name in normalized_name:
+                            matched_id = poi_id
+                            break
+
+                if matched_id:
+                    step["poi_id"] = matched_id
+                    normalized_steps.append(step)
+                else:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning("Step descartado: UUID inválido y no hay match por nombre. UUID=%s", raw_poi_id)
             continue
 
         candidate_name = raw_poi_id or step.get("poi_name") or step.get("name") or step.get("title")

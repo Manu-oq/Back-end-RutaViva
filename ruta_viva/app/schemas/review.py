@@ -20,6 +20,7 @@ class ReviewUpdate(BaseModel):
 class ReviewResponse(ReviewCreate):
     id: UUID
     tourist_id: UUID
+    author_name: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

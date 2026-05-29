@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
-
-from pydantic import ValidationError
 
 from app.core.config import settings
 from app.schemas.ara_comprehension import ComprehensionResult
@@ -13,6 +12,29 @@ from app.services.ara_v2.prompt_manager import build_comprehension_prompt
 from app.services.ara_v2.utils import get_gpt_mini_client
 
 logger = logging.getLogger(__name__)
+
+_INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+previous\s+instructions", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now", re.IGNORECASE),
+    re.compile(r"^system\s*:", re.IGNORECASE),
+    re.compile(r"new\s+instruction\s*:", re.IGNORECASE),
+    re.compile(r"act\s+as\b", re.IGNORECASE),
+    re.compile(r"pretend\s+to\s+be", re.IGNORECASE),
+    re.compile(r"override\s+your\s+rules", re.IGNORECASE),
+    re.compile(r"bypass\s+your\s+restrictions", re.IGNORECASE),
+    re.compile(r"disable\s+safety", re.IGNORECASE),
+]
+
+
+def detect_prompt_injection(user_message: str) -> bool:
+    """Detecta patrones básicos de prompt injection en el mensaje del usuario."""
+    return any(pattern.search(user_message) for pattern in _INJECTION_PATTERNS)
+
+
+def sanitize_user_message(user_message: str) -> str:
+    """Envuelve el mensaje del usuario en delimitadores XML para el LLM."""
+    escaped = user_message.replace("</user_message>", "&lt;/user_message&gt;")
+    return f"<user_message>{escaped}</user_message>"
 
 _VALID_ENTITY_TYPES = {
     "destino",
@@ -55,6 +77,14 @@ class Comprensor:
         candidate_pois_count: int = 0,
     ) -> ComprehensionResult:
         """Analiza el mensaje del usuario y devuelve un ComprehensionResult estructurado."""
+        if detect_prompt_injection(user_message):
+            logger.warning("Potential prompt injection detected: %s", user_message[:100])
+            return fallback_comprehend(
+                "No entendí bien. ¿Puedes reformular tu consulta sobre tu viaje?",
+                has_dates=bool(trip_draft.get("start_date") and trip_draft.get("end_date")),
+                has_destination=bool(trip_draft.get("has_destination") or trip_draft.get("destination")),
+            )
+
         trip_draft = trip_draft or {}
         session_context: dict[str, Any] = {
             "initial_query": trip_draft.get("initial_query", ""),
@@ -68,13 +98,14 @@ class Comprensor:
         }
 
         system_prompt = build_comprehension_prompt(session_context)
+        sanitized_message = sanitize_user_message(user_message)
 
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
+                    {"role": "user", "content": sanitized_message},
                 ],
                 temperature=0,
                 response_format={"type": "json_object"},
@@ -94,7 +125,7 @@ class Comprensor:
             )
             return result
 
-        except (TimeoutError, json.JSONDecodeError, ValidationError, ValueError, Exception) as exc:
+        except Exception as exc:
             logger.warning("GPT-4o-mini failed, using fallback: %s", exc)
             return fallback_comprehend(
                 user_message,
@@ -156,6 +187,8 @@ def normalize_comprehension_payload(payload: Any) -> Any:
     normalized["actualizaciones_memoria"] = memory_updates
 
     quick_replies = normalized.get("sugerir_quick_replies")
+    if isinstance(quick_replies, dict):
+        quick_replies = [quick_replies]
     if isinstance(quick_replies, list):
         normalized_quick_replies = []
         for raw_reply in quick_replies:

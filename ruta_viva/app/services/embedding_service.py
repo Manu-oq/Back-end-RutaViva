@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+import asyncio
+
 from openai import AsyncOpenAI
 
 from app.core.config import settings
@@ -32,15 +35,58 @@ class OpenAIEmbeddingService:
         return [item.embedding for item in sorted(response.data, key=lambda d: d.index)]
 
 
-class EmbeddingCache:
-    def __init__(self, service: OpenAIEmbeddingService) -> None:
+class GlobalEmbeddingCache:
+    """Cache de embeddings a nivel de proceso con TTL. Sobrevive entre requests."""
+
+    def __init__(self, service: OpenAIEmbeddingService, ttl_seconds: int = 900) -> None:
         self._service = service
-        self._cache: dict[str, list[float]] = {}
+        self._cache: dict[str, tuple[float, list[float]]] = {}
+        self._ttl = ttl_seconds
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def get_embedding(self, text: str) -> list[float]:
-        if text not in self._cache:
-            self._cache[text] = await self._service.get_embedding(text)
-        return self._cache[text]
+        now = time.monotonic()
+        if text in self._cache:
+            expires, emb = self._cache[text]
+            if now < expires:
+                return emb
+
+        lock = self._locks.setdefault(text, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            if text in self._cache:
+                expires, emb = self._cache[text]
+                if now < expires:
+                    return emb
+
+            emb = await self._service.get_embedding(text)
+            self._cache[text] = (now + self._ttl, emb)
+            self._locks.pop(text, None)
+            return emb
+
+
+class EmbeddingCache:
+    """Cache request-scoped que delega al GlobalEmbeddingCache para compartir entre requests."""
+
+    def __init__(self, service: OpenAIEmbeddingService) -> None:
+        self._service = service
+        self._local: dict[str, list[float]] = {}
+        self._global = get_global_embedding_cache()
+
+    async def get_embedding(self, text: str) -> list[float]:
+        if text not in self._local:
+            self._local[text] = await self._global.get_embedding(text)
+        return self._local[text]
+
+
+_global_embedding_cache: GlobalEmbeddingCache | None = None
+
+
+def get_global_embedding_cache() -> GlobalEmbeddingCache:
+    global _global_embedding_cache
+    if _global_embedding_cache is None:
+        _global_embedding_cache = GlobalEmbeddingCache(OpenAIEmbeddingService())
+    return _global_embedding_cache
 
 
 _embedding_service: OpenAIEmbeddingService | None = None

@@ -39,9 +39,16 @@ def fallback_comprehend(
     memoria: list[MemoryFact] = []
     preguntas: list[str] = []
 
-    if any(kw in msg for kw in ["generar", "itinerario", "hacelo todo", "armame", "creame", "que lo arme ara"]):
+    # build_itinerary: explicit action verbs always trigger
+    if any(kw in msg for kw in ["generar", "genera", "hacelo todo", "armame", "creame", "que lo arme ara", "armar itinerario", "crear viaje", "generar viaje", "armar viaje"]):
         intenciones.append("build_itinerary")
         herramientas.append("build_itinerary")
+
+    # "itinerario" alone is not enough — only trigger if dates are already defined
+    if "itinerario" in msg and has_dates:
+        if "build_itinerary" not in intenciones:
+            intenciones.append("build_itinerary")
+            herramientas.append("build_itinerary")
 
     if any(kw in msg for kw in ["clima", "lluvia", "tiempo", "temperatura", "pronostico"]):
         intenciones.append("get_weather")
@@ -71,15 +78,24 @@ def fallback_comprehend(
     if "familia" in msg or "con niños" in msg or "con hijos" in msg:
         memoria.append(MemoryFact(hecho="viaja con familia", categoria="entidad", confianza=0.75))
 
-    if any(kw in msg for kw in ["cabaña", "cabana", "hotel", "hostal", "hostel", "camping"]):
+    if any(kw in msg for kw in ["cabaña", "cabana", "camping"]):
         memoria.append(MemoryFact(hecho="preferencia de alojamiento mencionada", categoria="alojamiento", confianza=0.75))
 
-    # Category detection: gastronomía
-    if any(kw in msg for kw in ["restaurante", "comida", "gastronomia", "gastronomía", "comer", "almuerzo", "cena", "merendar"]):
+    # Category detection: gastronomía (only if not mixed with activity context)
+    food_keywords = ["restaurante", "comida", "gastronomia", "gastronomía", "comer", "almuerzo", "cena", "merendar"]
+    activity_keywords = ["actividades", "tarde", "recomiendas", "que hacer", "que visitar", "imperdible", "imperdibles"]
+    has_food = any(kw in msg for kw in food_keywords)
+    has_activity = any(kw in msg for kw in activity_keywords)
+
+    if has_food and not has_activity:
         entidades.append(ExtractedEntity(tipo="categoria", valor="gastronomía", confianza=0.8))
         if "search_pois" not in intenciones:
             intenciones.append("search_pois")
             herramientas.append("search_pois")
+    elif has_food and has_activity:
+        # User mentions food in activity context — prioritize activities
+        intenciones.append("search_pois")
+        herramientas.append("search_pois")
 
     # Category detection: pizza
     if any(kw in msg for kw in ["pizza", "pizzeria", "pizzería"]):
@@ -125,8 +141,12 @@ def fallback_comprehend(
         month_name = date_match.group(2)
         months = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
                   "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12}
+        from datetime import date as date_type
         current_year = datetime.now().year
         month = months.get(month_name, 6)
+        parsed_date = date_type(current_year, month, min(day, 28))
+        if parsed_date < datetime.now().date():
+            current_year += 1
         entidades.append(ExtractedEntity(tipo="fecha", valor=f"{current_year}-{month:02d}-{day:02d}", confianza=0.6))
 
     if not intenciones:

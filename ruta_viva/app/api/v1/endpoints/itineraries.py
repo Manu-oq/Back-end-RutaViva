@@ -139,6 +139,35 @@ async def reorder_my_itinerary_steps(
     return itinerary
 
 
+@router.patch("/{itinerary_id}/steps/reorder-with-times", response_model=ItineraryResponse)
+async def reorder_my_itinerary_steps_with_times(
+    itinerary_id: UUID,
+    payload: ReorderStepsWithTimesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ItineraryResponse:
+    if current_user.tourist_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only tourist users can edit itinerary steps.",
+        )
+
+    try:
+        itinerary = await itinerary_repository.reorder_steps_with_times(
+            db,
+            itinerary_id=itinerary_id,
+            tourist_id=current_user.id,
+            payload=payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    if itinerary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
+
+    return itinerary
+
+
 @router.post("/{itinerary_id}/steps", response_model=ItineraryResponse, status_code=status.HTTP_201_CREATED)
 async def add_my_itinerary_step(
     itinerary_id: UUID,
@@ -321,35 +350,6 @@ async def reschedule_my_itinerary_step(
     )
     if itinerary is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary or step not found.")
-
-    return itinerary
-
-
-@router.patch("/{itinerary_id}/steps/reorder-with-times", response_model=ItineraryResponse)
-async def reorder_my_itinerary_steps_with_times(
-    itinerary_id: UUID,
-    payload: ReorderStepsWithTimesRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> ItineraryResponse:
-    if current_user.tourist_profile is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only tourist users can edit itinerary steps.",
-        )
-
-    try:
-        itinerary = await itinerary_repository.reorder_steps_with_times(
-            db,
-            itinerary_id=itinerary_id,
-            tourist_id=current_user.id,
-            payload=payload,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-    if itinerary is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
 
     return itinerary
 

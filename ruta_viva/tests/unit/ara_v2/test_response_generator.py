@@ -123,7 +123,7 @@ class TestAnswerQuestionResponse:
         result = await gen.generate_response(comprehension, tool_result, session)
 
         assert result["text"] == "El Salto del Lago es de dificultad media."
-        assert result["quick_replies"] == []
+        assert len(result["quick_replies"]) >= 1  # Contextual quick replies generated
 
 
 class TestClarificationResponse:
@@ -273,7 +273,7 @@ class TestNoQuickRepliesForOpenResponse:
 
         result = await gen.generate_response(comprehension, tool_result, session)
 
-        assert result["quick_replies"] == []
+        assert len(result["quick_replies"]) >= 1  # Contextual quick replies generated
 
 
 class TestFallbackOnGptFailure:

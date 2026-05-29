@@ -10,7 +10,10 @@ class WeatherDailyForecast(BaseModel):
     label: str
     description: str
     temperature_c: int
+    min_temp_c: int | None = None
+    max_temp_c: int | None = None
     precipitation_probability: int
+    precipitation_mm: float | None = None
 
 
 class WeatherForecastResponse(BaseModel):

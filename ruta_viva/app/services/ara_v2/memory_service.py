@@ -48,6 +48,35 @@ class MemoryService:
         await db.flush()
         return fact
 
+    async def store_facts_batch(
+        self,
+        db: AsyncSession,
+        tourist_id: UUID,
+        session_id: UUID,
+        facts: list[dict[str, Any]],
+    ) -> None:
+        """Store multiple facts efficiently using batch embedding."""
+        if not facts:
+            return
+
+        textos = [f.get("hecho", "") for f in facts]
+        categorias = [f.get("categoria", "general") for f in facts]
+        confianzas = [f.get("confianza", 0.5) for f in facts]
+
+        embeddings = await self._embedding_service.get_embeddings_batch(textos)
+
+        for texto, categoria, confianza, embedding in zip(textos, categorias, confianzas, embeddings):
+            memory = ConversationMemory(
+                tourist_id=tourist_id,
+                session_id=session_id,
+                hecho=texto,
+                categoria=categoria,
+                confianza=confianza,
+                embedding=embedding,
+            )
+            db.add(memory)
+        await db.flush()
+
     async def retrieve_relevant_facts(
         self,
         db: AsyncSession,

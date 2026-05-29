@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.services.ara_v2.prompt_manager import (
     build_comprehension_prompt,
     build_generation_prompt,
-    build_answer_question_prompt,
 )
 
 
@@ -80,40 +79,3 @@ class TestGenerationPrompt:
         assert "vegetariano" in prompt
         assert "sin mariscos" in prompt
         assert "senderismo" in prompt
-
-
-class TestAnswerQuestionPrompt:
-    def test_contains_poi_context(self):
-        prompt = build_answer_question_prompt(
-            poi_context={"description": "Volcan activo de 2847m"},
-            user_facts=[],
-            user_question="Es dificil subir?",
-        )
-        assert "Volcan activo de 2847m" in prompt
-        assert "Es dificil subir?" in prompt
-
-    def test_injects_user_facts(self):
-        facts = [{"hecho": "prefiere baja dificultad", "categoria": "preferencia"}]
-        prompt = build_answer_question_prompt(
-            poi_context={"description": "Volcan"},
-            user_facts=facts,
-            user_question="Es dificil?",
-        )
-        assert "prefiere baja dificultad" in prompt
-        assert "[preferencia]" in prompt
-
-    def test_no_facts_shows_placeholder(self):
-        prompt = build_answer_question_prompt(
-            poi_context={"description": "Volcan"},
-            user_facts=[],
-            user_question="Es dificil?",
-        )
-        assert "(no hay hechos memorizados relevantes)" in prompt
-
-    def test_contains_neutral_spanish_instruction(self):
-        prompt = build_answer_question_prompt(
-            poi_context={"description": "Test"},
-            user_facts=[],
-            user_question="Test?",
-        )
-        assert "neutro latinoamericano" in prompt.lower()

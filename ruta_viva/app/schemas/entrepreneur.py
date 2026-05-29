@@ -39,6 +39,7 @@ class EntrepreneurPostResponse(BaseModel):
     image_url: str | None = None
     is_published: bool
     is_pinned: bool
+    sort_order: int | None = None
     scheduled_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -66,6 +67,7 @@ class PublicEntrepreneurPostResponse(BaseModel):
     image_url: str | None = None
     is_published: bool
     is_pinned: bool
+    sort_order: int | None = None
     scheduled_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

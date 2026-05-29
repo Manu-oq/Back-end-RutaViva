@@ -64,11 +64,17 @@ BLACKLIST_TERMS_BY_REASON = {
         "servicentro",
         "toilets",
         "baño",
-        "baño",
+        "baño",
         "banco",
         "bank",
         "atm",
         "cajero",
+        "car_rental",
+        "rentacar",
+        "rent a car",
+        "arriendo de autos",
+        "arriendo de vehículos",
+        "alquiler de autos",
     ),
 }
 DELEGATED_RECOMMENDATION_TERMS = (

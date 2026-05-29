@@ -73,6 +73,20 @@ def build_poi_response_from_row(
     category_ids: list[int],
     distance_meters: float | None = None,
 ) -> POIResponse:
+    sanitized_multimedia = sanitize_multimedia_urls(poi.multimedia_urls)
+
+    # Extract cover image URL for direct access
+    image_url = None
+    if sanitized_multimedia:
+        image_url = (
+            sanitized_multimedia.get("cover")
+            or sanitized_multimedia.get("image")
+            or sanitized_multimedia.get("image_url")
+        )
+        if sanitized_multimedia.get("gallery") and not image_url:
+            gallery = sanitized_multimedia["gallery"]
+            image_url = gallery[0] if gallery else None
+
     return POIResponse(
         id=poi.id,
         name=poi.name,
@@ -80,7 +94,8 @@ def build_poi_response_from_row(
         access_type=poi.access_type,
         contact_phone=poi.contact_phone,
         contact_email=poi.contact_email,
-        multimedia_urls=sanitize_multimedia_urls(poi.multimedia_urls),
+        multimedia_urls=sanitized_multimedia,
+        image_url=image_url,
         opening_hours_text=poi.opening_hours_text,
         visit_rules=poi.visit_rules,
         category_ids=category_ids,

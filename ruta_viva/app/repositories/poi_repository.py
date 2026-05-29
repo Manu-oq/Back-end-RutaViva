@@ -221,6 +221,7 @@ class POIRepository(BaseRepository):
         user_interests_embedding: list[float] | None = None,
         profile_weight: float = 0.3,
         limit: int = 5,
+        category_ids: list[int] | None = None,
     ) -> list[POIResponse]:
         reference_point = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
         poi_geography = cast(POI.location, Geography)
@@ -244,9 +245,14 @@ class POIRepository(BaseRepository):
             .where(func.ST_DWithin(poi_geography, reference_geography, radius_meters))
             .where(POI.description_embedding.is_not(None))
             .where(POI.verification_status != "flagged")
-            .order_by("ranking_score")
-            .limit(limit)
         )
+
+        if category_ids:
+            stmt = stmt.join(POICategory, POI.id == POICategory.poi_id).where(
+                POICategory.category_id.in_(category_ids)
+            )
+
+        stmt = stmt.order_by("ranking_score").limit(limit)
 
         result = await db.execute(stmt)
         rows = result.all()
@@ -402,9 +408,11 @@ class POIRepository(BaseRepository):
         name: str,
         limit: int = 5,
     ) -> list[POI]:
+        # Escape SQL LIKE wildcards to prevent injection
+        escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         stmt = (
             select(POI)
-            .where(POI.name.ilike(f"%{name}%"))
+            .where(func.lower(POI.name).like(f"%{escaped}%", escape="\\"))
             .where(POI.verification_status != "flagged")
             .limit(limit)
         )

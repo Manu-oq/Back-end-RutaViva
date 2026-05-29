@@ -13,13 +13,10 @@ from app.models.ara_session import AraSession
 from app.models.user import User
 from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
-from app.schemas.ara_comprehension import ComprehensionResult, QuickReplySuggestion, ToolExecutionResult
-from app.schemas.itinerary import GenerateItineraryRequest
+from app.schemas.ara import AraGenerateItineraryRequest
+from app.schemas.ara_comprehension import ComprehensionResult, ToolExecutionResult
+from app.services.ara_itinerary_core import generate_itinerary_core
 from app.services.embedding_service import get_embedding_service
-from app.services.itinerary_generation_service import (
-    build_schedule_guidance,
-    validate_generated_itinerary_rules,
-)
 from app.services.llm_service import get_itinerary_generator
 from app.services.poi_search_service import search_candidate_pois
 from app.services.weather_service import get_forecast as get_weather_forecast
@@ -41,8 +38,32 @@ class ToolOrchestrator:
         db: AsyncSession,
         current_user_message: str | None = None,
     ) -> ToolExecutionResult:
+        # Gate de fuera-de-domino: evitar consumir recursos en mensajes irrelevantes
+        if comprehension.intencion_principal == "general" and comprehension.confianza < 0.4:
+            return ToolExecutionResult(
+                status="clarify",
+                response_text=(
+                    "Soy Ara, tu asistente de viajes. "
+                    "Puedo ayudarte a planificar itinerarios, buscar lugares y organizar tu viaje. "
+                    "¿A dónde quieres ir?"
+                ),
+            )
+
         tools = list(comprehension.herramientas_necesarias)
         result = ToolExecutionResult(status="respond")
+        current_user_message = current_user_message or ""
+
+        # Redirigir answer_question → search_pois cuando no hay entidad POI
+        # (solo destino/ciudad). Evita que "voy a Pucón" se trate como pregunta.
+        if "answer_question" in tools and not any(e.tipo == "poi" for e in comprehension.entidades):
+            has_poi_question_terms = any(
+                term in self._normalize_text(current_user_message)
+                for term in ("que es", "que sabes", "cuentame", "vale la pena", "dificil")
+            )
+            if not has_poi_question_terms:
+                tools = [t for t in tools if t != "answer_question"]
+                if "search_pois" not in tools:
+                    tools.append("search_pois")
         current_user_message = current_user_message or ""
 
         if self._looks_like_poi_question(current_user_message, comprehension):
@@ -59,18 +80,16 @@ class ToolOrchestrator:
             )
             result.status = "respond"
             result.candidate_pois = []
-            result.quick_replies = [
-                QuickReplySuggestion(label="Buscar mas lugares", value="buscar_mas", type="action"),
-                QuickReplySuggestion(label="Armar itinerario", value="generar_itinerario", type="generate"),
-                QuickReplySuggestion(label="Donde comer cerca?", value="gastronomia_cerca", type="action"),
-            ]
+            # Use comprehension quick replies if available, otherwise let response generator decide
+            result.quick_replies = comprehension.sugerir_quick_replies or []
             return result
 
         # 1. Herramientas independientes en paralelo
         tasks: list[asyncio.Task] = []
-        if "search_pois" in tools:
+        search_already_executed = "search_pois" in tools
+        if search_already_executed:
             tasks.append(asyncio.create_task(self._search_pois(db, user, comprehension, session, current_user_message)))
-        if "get_weather" in tools and session.start_date and session.lat is not None:
+        if "get_weather" in tools and session.start_date and session.end_date and session.lat is not None:
             tasks.append(asyncio.create_task(self._get_weather(session)))
 
         if tasks:
@@ -87,21 +106,21 @@ class ToolOrchestrator:
 
         # 2. Herramientas dependientes en secuencia
         if "build_itinerary" in tools:
-            if not result.candidate_pois:
-                search_res = await self._search_pois(db, user, comprehension, session, current_user_message)
-                result.candidate_pois = search_res.get("pois", [])
-
-            try:
-                itinerary = await self._build_itinerary(
-                    db, user, comprehension, session, result.candidate_pois or [], result.weather_forecast
-                )
-                result.itinerary = itinerary
-                result.status = "generate"
-            except Exception as exc:
-                logger.exception("Build itinerary failed")
-                result.status = "error"
-                result.error = str(exc)
-            return result
+            # Don't build itinerary if critical info is missing — let clarification run first
+            if not session.start_date or not session.end_date:
+                # Fall through to clarification section below
+                pass
+            # If SSE streaming already started, don't generate a second itinerary
+            elif session.status == "ready_to_generate":
+                result.status = "respond"
+                result.response_text = "Estoy generando tu itinerario en segundo plano. Puedes ver el progreso en cualquier momento."
+                return result
+            else:
+                # Signal that itinerary generation is needed — actual generation happens via SSE
+                # to avoid blocking the conversational flow
+                result.status = "itinerary_pending"
+                result.response_text = "Estoy armando tu itinerario personalizado..."
+                return result
 
         if "suggest_replacement" in tools:
             try:
@@ -123,13 +142,22 @@ class ToolOrchestrator:
                     session,
                     current_user_message=current_user_message,
                 )
-                result.response_text = answer["text"]
-                result.status = "respond"
+                # Si no encontro el POI, redirigir a busqueda
+                if answer.get("evidence_level") == "unknown" and "no tengo" in answer.get("text", "").lower():
+                    logger.info("answer_question no encontro POI, redirigiendo a search_pois")
+                    tools = [t for t in tools if t != "answer_question"]
+                    if "search_pois" not in tools:
+                        tools.append("search_pois")
+                    # Continue to search instead of returning
+                else:
+                    result.response_text = answer["text"]
+                    result.status = "respond"
+                    return result
             except Exception as exc:
                 logger.exception("Answer question failed")
                 result.status = "error"
                 result.error = str(exc)
-            return result
+                return result
 
         # 3. Clarificacion si hay preguntas pendientes
         if comprehension.preguntas_pendientes:
@@ -156,9 +184,46 @@ class ToolOrchestrator:
         categorias = [e.valor for e in comprehension.entidades if e.tipo == "categoria"]
         message = current_user_message or ""
 
-        lat = session.lat
-        lon = session.lon
+        # Use geocoded destination coordinates if available, fallback to GPS
+        geocoded = (session.preferences_data or {}).get("geocoded_destination")
+        if geocoded and isinstance(geocoded, dict):
+            lat = geocoded.get("lat")
+            lon = geocoded.get("lon")
+        else:
+            lat = session.lat
+            lon = session.lon
         radius = session.radius or 8000
+
+        # Resolve comprehender category intents to DB category names, then to IDs
+        resolved_category_ids: list[int] | None = None
+        if categorias:
+            from app.models.category import Category
+            from app.services.ara_v2.category_mapping import CATEGORY_INTENT_TO_DB_NAMES
+            from sqlalchemy import func, select
+
+            # Map each intent to its DB category names
+            db_category_names: set[str] = set()
+            for cat in categorias:
+                cat_lower = cat.lower()
+                mapped_names = CATEGORY_INTENT_TO_DB_NAMES.get(cat_lower, [])
+                if mapped_names:
+                    db_category_names.update(mapped_names)
+                else:
+                    # If no mapping exists, fall back to general search (no category filter)
+                    logger.info("Unmapped category '%s' — searching without category filter", cat)
+                    db_category_names.clear()
+                    break
+
+            # Case-insensitive lookup in the database (only if we have names to look up)
+            if db_category_names:
+                stmt = select(Category.id).where(
+                    func.lower(Category.name).in_([name.lower() for name in db_category_names])
+                )
+                result = await db.execute(stmt)
+                found_ids = [row[0] for row in result.all()]
+                if found_ids:
+                    resolved_category_ids = found_ids
+                # If still no IDs found after mapping, proceed without category filter
 
         query_parts = [destino] if destino else []
         query_parts.extend(preferencias)
@@ -170,14 +235,9 @@ class ToolOrchestrator:
             pois = await search_candidate_pois(
                 db, poi_repository, search_query, user,
                 None, lat=lat, lon=lon, radius=radius,
+                category_ids=resolved_category_ids,
             )
             pois = self._filter_repeated_pois(session, pois)
-
-            # Filter by category if specified
-            if categorias:
-                filtered = self._filter_pois_by_category(pois, categorias)
-                if filtered:
-                    pois = filtered
 
             session.candidate_poi_ids = [poi.id for poi in pois]
             self._remember_shown_pois(session, [poi.id for poi in pois])
@@ -186,46 +246,109 @@ class ToolOrchestrator:
             logger.warning("search_pois failed: %s", exc)
             return {"type": "pois", "pois": [], "count": 0}
 
-    @staticmethod
-    def _filter_pois_by_category(pois: list, categorias: list[str]) -> list:
-        """Filter POIs by category names (case-insensitive partial match)."""
-        if not categorias:
-            return pois
+    async def _search_diverse_pois(
+        self,
+        db: AsyncSession,
+        user: User,
+        session: AraSession,
+    ) -> dict[str, Any]:
+        """Search POIs across multiple categories for diverse itinerary context.
 
-        category_map = {
-            "gastronomía": {"gastronomía", "gastronomia", "restaurante", "comida", "café", "cafe"},
-            "alojamiento": {"alojamiento", "hotel", "hostal", "hostel", "cabaña", "cabana", "camping"},
-            "naturaleza": {"naturaleza", "senderismo", "trekking", "parque", "reserva"},
-            "termas": {"termas", "terma", "thermal", "spa", "bienestar"},
-            "aventura": {"aventura", "deportes", "ski", "kayak", "rafting"},
-            "cultura": {"cultura", "museo", "patrimonio", "histórico"},
-        }
+        Parallelizes category searches and caches the embedding to avoid
+        redundant OpenAI API calls.
+        """
+        import asyncio
 
-        matched_keywords = set()
-        for cat in categorias:
-            cat_lower = cat.lower()
-            for key, keywords in category_map.items():
-                if cat_lower in keywords or key.startswith(cat_lower[:5]):
-                    matched_keywords.update(keywords)
+        from app.models.category import Category
+        from app.services.ara_v2.category_mapping import CATEGORY_INTENT_TO_DB_NAMES
+        from app.services.embedding_service import get_embedding_service
+        from sqlalchemy import func, select
 
-        if not matched_keywords:
-            return pois
+        lat = session.lat
+        lon = session.lon
+        radius = session.radius or 8000
 
-        filtered = []
-        for poi in pois:
-            poi_text = ""
-            if hasattr(poi, "name"):
-                poi_text += f" {poi.name}"
-            if hasattr(poi, "description") and poi.description:
-                poi_text += f" {poi.description}"
-            if hasattr(poi, "category_ids"):
-                poi_text += f" {poi.category_ids}"
-            poi_text = poi_text.lower()
+        # Build diverse category search: pick top categories from mapping
+        diverse_categories = ["naturaleza", "gastronomia", "cultura", "aventura", "termas"]
+        db_category_names: set[str] = set()
+        for cat in diverse_categories:
+            mapped = CATEGORY_INTENT_TO_DB_NAMES.get(cat, [])
+            db_category_names.update(mapped)
 
-            if any(kw in poi_text for kw in matched_keywords):
-                filtered.append(poi)
+        if not db_category_names:
+            return {"type": "pois", "pois": [], "count": 0}
 
-        return filtered if filtered else pois
+        # Lookup category IDs
+        stmt = select(Category.id).where(
+            func.lower(Category.name).in_([name.lower() for name in db_category_names])
+        )
+        result = await db.execute(stmt)
+        category_ids = [row[0] for row in result.all()]
+
+        # Generate embedding ONCE for all searches
+        search_query = session.initial_query or "turismo La Araucania actividades"
+        embedding_service = get_embedding_service()
+        try:
+            query_embedding = await embedding_service.get_embedding(search_query)
+        except Exception as exc:
+            logger.warning("Failed to generate embedding for diverse search: %s", exc)
+            return {"type": "pois", "pois": [], "count": 0}
+
+        # Parallel search per category
+        async def _search_single_category(cat_id: int) -> list:
+            try:
+                return await search_candidate_pois(
+                    db, poi_repository, search_query, user,
+                    None, lat=lat, lon=lon, radius=radius,
+                    limit=5,
+                    category_ids=[cat_id],
+                    query_embedding=query_embedding,
+                )
+            except Exception as exc:
+                logger.warning("Diverse search failed for category %s: %s", cat_id, exc)
+                return []
+
+        tasks = [_search_single_category(cat_id) for cat_id in category_ids]
+        category_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Combine results, deduplicating by ID
+        all_pois: list = []
+        seen_ids: set = set()
+        for cat_result in category_results:
+            if isinstance(cat_result, Exception):
+                continue
+            for poi in cat_result:
+                poi_id = getattr(poi, "id", None)
+                if poi_id and poi_id not in seen_ids:
+                    all_pois.append(poi)
+                    seen_ids.add(poi_id)
+
+        # Ensure minimum POIs: if below 15, do a general search without category filter
+        min_pois = 15
+        if len(all_pois) < min_pois:
+            try:
+                general_pois = await search_candidate_pois(
+                    db, poi_repository, search_query, user,
+                    None, lat=lat, lon=lon, radius=radius,
+                    limit=min_pois - len(all_pois),
+                    query_embedding=query_embedding,
+                )
+                for poi in general_pois:
+                    poi_id = getattr(poi, "id", None)
+                    if poi_id and poi_id not in seen_ids:
+                        all_pois.append(poi)
+                        seen_ids.add(poi_id)
+            except Exception as exc:
+                logger.warning("Fallback general POI search failed: %s", exc)
+
+        # Deduplicate against already-shown POIs
+        all_pois = self._filter_repeated_pois(session, all_pois)
+
+        if all_pois:
+            session.candidate_poi_ids = [poi.id for poi in all_pois]
+            self._remember_shown_pois(session, [poi.id for poi in all_pois])
+
+        return {"type": "pois", "pois": [self._serialize_poi(poi) for poi in all_pois], "count": len(all_pois)}
 
     @staticmethod
     def _serialize_poi(poi: Any) -> dict[str, Any]:
@@ -241,6 +364,7 @@ class ToolOrchestrator:
             "id": str(getattr(poi, "id", "")),
             "name": getattr(poi, "name", ""),
             "description": getattr(poi, "description", None),
+            "access_type": getattr(poi, "access_type", "public"),
             "category_ids": list(getattr(poi, "category_ids", []) or []),
             "latitude": getattr(poi, "latitude", None),
             "longitude": getattr(poi, "longitude", None),
@@ -252,9 +376,15 @@ class ToolOrchestrator:
 
     @staticmethod
     def _normalize_text(value: str) -> str:
+        """Normalize text for keyword matching — strips accents for broader matching."""
         normalized = unicodedata.normalize("NFKD", value or "")
         without_accents = "".join(ch for ch in normalized if not unicodedata.combining(ch))
         return re.sub(r"\s+", " ", without_accents.lower()).strip()
+
+    @staticmethod
+    def _normalize_for_name_match(value: str) -> str:
+        """Normalize text for POI name matching — preserves accents to avoid false positives."""
+        return re.sub(r"\s+", " ", (value or "").lower()).strip()
 
     @classmethod
     def _looks_like_poi_question(cls, message: str, comprehension: ComprehensionResult) -> bool:
@@ -316,14 +446,14 @@ class ToolOrchestrator:
         names_to_match.extend([getattr(candidate, "name", "") for candidate in candidates])
 
         for candidate in candidates:
-            candidate_name = self._normalize_text(getattr(candidate, "name", ""))
+            candidate_name = self._normalize_for_name_match(getattr(candidate, "name", ""))
             if candidate_name and candidate_name in normalized_message:
                 return candidate
 
         for name in names_to_match:
             if not name:
                 continue
-            normalized_name = self._normalize_text(name)
+            normalized_name = self._normalize_for_name_match(name)
             if normalized_name and normalized_name in normalized_message:
                 matches = await poi_repository.search_by_name(db, name, limit=1)
                 if matches:
@@ -395,69 +525,36 @@ class ToolOrchestrator:
         if not session.start_date or not session.end_date:
             raise ValueError("Fechas de inicio y fin son requeridas para generar itinerario")
 
-        payload = GenerateItineraryRequest(
-            query=session.initial_query,
-            lat=session.lat,
-            lon=session.lon,
-            radius=session.radius or 5000,
-            start_date=session.start_date,
-            end_date=session.end_date,
+        # Include user-selected POIs in candidate_pois
+        if session.preferences_data:
+            selected_poi_ids = session.preferences_data.get("selected_poi_ids") or []
+            if selected_poi_ids:
+                from app.schemas.poi import POIResponse
+                existing_ids = {getattr(p, "id", None) for p in candidate_pois} | {p.get("id") for p in candidate_pois if isinstance(p, dict)}
+                for sid in selected_poi_ids:
+                    try:
+                        selected_poi = await poi_repository.get_poi_by_id(db, UUID(str(sid)))
+                        if selected_poi and selected_poi.id not in existing_ids:
+                            candidate_pois = [selected_poi] + list(candidate_pois)
+                            existing_ids.add(selected_poi.id)
+                    except Exception:
+                        logger.warning("Could not load selected POI %s", sid)
+
+        async def _log_phase(name: str, extra: dict | None = None) -> None:
+            logger.info("Itinerary phase: %s extra=%s", name, extra)
+
+        itinerary, _, _ = await generate_itinerary_core(
+            session=session,
+            payload=AraGenerateItineraryRequest(),
+            db=db,
+            current_user=user,
+            embedding_service=get_embedding_service(),
+            llm_service=get_itinerary_generator(),
+            candidate_pois=candidate_pois,
+            weather_forecast=weather_forecast,
+            on_phase=_log_phase,
         )
-
-        messages = session.__dict__.get("messages") or []
-        user_messages = [m.content for m in messages if m.role == "user"]
-        refined_query = f"Consulta: {session.initial_query}. Mensajes: {' | '.join(user_messages)}"
-
-        schedule_guidance = build_schedule_guidance(payload)
-
-        # Convert dicts back to POIResponse objects for generate_itinerary()
-        from app.schemas.poi import POIResponse
-        poi_objects: list[POIResponse] = []
-        for p in candidate_pois:
-            if isinstance(p, dict):
-                poi_objects.append(POIResponse(
-                    id=p.get("id"),
-                    name=p.get("name", ""),
-                    description=p.get("description") or "",
-                    access_type=p.get("access_type", "public"),
-                    latitude=p.get("latitude") or 0.0,
-                    longitude=p.get("longitude") or 0.0,
-                    category_ids=p.get("category_ids", []),
-                    image_url=p.get("image_url"),
-                    distance_meters=p.get("distance_meters"),
-                    poi_role=p.get("poi_role"),
-                ))
-            elif hasattr(p, "model_dump"):
-                poi_objects.append(p)
-            else:
-                poi_objects.append(POIResponse(
-                    id=getattr(p, "id", None),
-                    name=getattr(p, "name", ""),
-                    description=getattr(p, "description", "") or "",
-                    access_type=getattr(p, "access_type", "public"),
-                    latitude=getattr(p, "latitude", 0.0) or 0.0,
-                    longitude=getattr(p, "longitude", 0.0) or 0.0,
-                    category_ids=list(getattr(p, "category_ids", []) or []),
-                    image_url=getattr(p, "image_url", None),
-                    distance_meters=getattr(p, "distance_meters", None),
-                    poi_role=getattr(p, "poi_role", None),
-                ))
-
-        generator = get_itinerary_generator()
-        raw_itinerary = await generator.generate_itinerary(
-            user_query=refined_query,
-            context_pois=poi_objects,
-            weather_forecast=weather_forecast or "No disponible",
-            schedule_guidance=schedule_guidance,
-        )
-
-        validate_generated_itinerary_rules(raw_itinerary, poi_objects, payload)
-
-        saved = await itinerary_repository.create_generated_itinerary(
-            db, user.id, session.start_date, session.end_date, raw_itinerary
-        )
-        session.generated_itinerary_id = saved.id
-        return saved
+        return itinerary
 
     async def _suggest_replacement(
         self,
@@ -466,7 +563,7 @@ class ToolOrchestrator:
         comprehension: ComprehensionResult,
         session: AraSession,
     ) -> dict[str, Any]:
-        from app.services.ara_itinerary_generation import (
+        from app.services.ara_replacement_service import (
             build_step_replacement_context,
             search_step_replacement_alternatives,
         )

@@ -60,6 +60,7 @@ class POIResponse(POIBase):
     latitude: float
     longitude: float
     distance_meters: float | None = None
+    image_url: str | None = None
     verification_status: str = "pending"
     confidence_score: float = 0.0
 

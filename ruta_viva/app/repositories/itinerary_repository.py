@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import secrets
 import string
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
+from app.core.exceptions import ItineraryNotEditableError
 from app.core.time_utils import CHILE_TZ, to_chile_timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,47 @@ SPANISH_WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sába
 
 
 class ItineraryRepository(BaseRepository):
+    @staticmethod
+    def _today_in_chile() -> date:
+        return datetime.now(CHILE_TZ).date()
+
+    def _is_past_itinerary(self, itinerary: Itinerary) -> bool:
+        return itinerary.end_date is not None and itinerary.end_date < self._today_in_chile()
+
+    def _is_editable_itinerary(self, itinerary: Itinerary) -> bool:
+        if itinerary.status in {"completed", "cancelled"}:
+            return False
+        return not self._is_past_itinerary(itinerary)
+
+    def _ensure_itinerary_editable(self, itinerary: Itinerary) -> None:
+        if not self._is_editable_itinerary(itinerary):
+            raise ItineraryNotEditableError()
+
+    @staticmethod
+    def _validate_reorder_ids(
+        current_step_ids: set[UUID],
+        requested_step_ids: list[UUID],
+        *,
+        field_name: str,
+    ) -> None:
+        counts = Counter(requested_step_ids)
+        duplicate_ids = [str(step_id) for step_id, count in counts.items() if count > 1]
+        if duplicate_ids:
+            raise ValueError(f"{field_name} contains duplicate step ids: {', '.join(duplicate_ids)}.")
+
+        requested_set = set(requested_step_ids)
+        missing_ids = [str(step_id) for step_id in sorted(current_step_ids - requested_set, key=str)]
+        if missing_ids:
+            raise ValueError(
+                f"{field_name} is missing itinerary step ids: {', '.join(missing_ids)}."
+            )
+
+        unknown_ids = [str(step_id) for step_id in sorted(requested_set - current_step_ids, key=str)]
+        if unknown_ids:
+            raise ValueError(
+                f"{field_name} contains step ids that do not belong to the itinerary: {', '.join(unknown_ids)}."
+            )
+
     async def create_generated_itinerary(
         self,
         db: AsyncSession,
@@ -80,10 +123,16 @@ class ItineraryRepository(BaseRepository):
             await db.rollback()
             raise
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
+
+    async def mark_itinerary_abandoned(self, db: AsyncSession, itinerary_id: UUID) -> bool:
+        """Mark an itinerary as cancelled (client disconnected after creation)."""
+        itinerary = await db.get(Itinerary, itinerary_id)
+        if itinerary is None:
+            return False
+        itinerary.status = "cancelled"
+        await db.flush()
+        return True
 
     async def get_itinerary_by_id(
         self,
@@ -158,6 +207,12 @@ class ItineraryRepository(BaseRepository):
         itinerary_id: UUID,
         tourist_id: UUID,
     ) -> bool:
+        itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
+        if itinerary is None:
+            return False
+
+        self._ensure_itinerary_editable(itinerary)
+
         try:
             result = await db.execute(
                 delete(Itinerary)
@@ -221,6 +276,7 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         step = next((candidate for candidate in itinerary.steps if candidate.id == step_id), None)
         if step is None:
@@ -240,10 +296,7 @@ class ItineraryRepository(BaseRepository):
 
         await self._commit_or_rollback(db)
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def add_step(
         self,
@@ -255,6 +308,7 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         poi = await db.get(POI, step_data.poi_id)
         if poi is None:
@@ -286,10 +340,7 @@ class ItineraryRepository(BaseRepository):
 
         await self._commit_or_rollback(db)
 
-        await db.refresh(itinerary, ["steps"])
-        for s in itinerary.steps:
-            await db.refresh(s, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def update_status(
         self,
@@ -301,15 +352,13 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         itinerary.status = new_status
 
         await self._commit_or_rollback(db)
 
-        await db.refresh(itinerary, ["steps"])
-        for s in itinerary.steps:
-            await db.refresh(s, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def delete_step(
         self,
@@ -321,6 +370,7 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         step = next((candidate for candidate in itinerary.steps if candidate.id == step_id), None)
         if step is None:
@@ -354,10 +404,7 @@ class ItineraryRepository(BaseRepository):
             await db.rollback()
             raise
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def reorder_steps(
         self,
@@ -369,11 +416,10 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         current_step_ids = {step.id for step in itinerary.steps}
-        requested_step_ids = set(step_ids)
-        if current_step_ids != requested_step_ids or len(step_ids) != len(current_step_ids):
-            raise ValueError("step_ids must contain every itinerary step exactly once.")
+        self._validate_reorder_ids(current_step_ids, step_ids, field_name="step_ids")
 
         steps_by_id = {step.id: step for step in itinerary.steps}
 
@@ -390,10 +436,7 @@ class ItineraryRepository(BaseRepository):
             await db.rollback()
             raise
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def reschedule_step(
         self,
@@ -406,6 +449,7 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         target = next((s for s in itinerary.steps if s.id == step_id), None)
         if target is None:
@@ -456,10 +500,7 @@ class ItineraryRepository(BaseRepository):
 
         await self._commit_or_rollback(db)
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def reorder_steps_with_times(
         self,
@@ -471,12 +512,15 @@ class ItineraryRepository(BaseRepository):
         itinerary = await self._get_itinerary_model(db, itinerary_id, tourist_id)
         if itinerary is None:
             return None
+        self._ensure_itinerary_editable(itinerary)
 
         start_date = itinerary.start_date
         current_step_ids = {step.id for step in itinerary.steps}
-        requested_step_ids = {step_position.step_id for step_position in payload.steps}
-        if current_step_ids != requested_step_ids or len(payload.steps) != len(current_step_ids):
-            raise ValueError("steps must contain every itinerary step exactly once.")
+        self._validate_reorder_ids(
+            current_step_ids,
+            [step_position.step_id for step_position in payload.steps],
+            field_name="steps",
+        )
 
         steps_by_id = {step.id: step for step in itinerary.steps}
 
@@ -553,10 +597,7 @@ class ItineraryRepository(BaseRepository):
             await db.rollback()
             raise
 
-        await db.refresh(itinerary, ["steps"])
-        for step in itinerary.steps:
-            await db.refresh(step, ["poi"])
-        return self._to_response(itinerary)
+        return await self.get_itinerary_by_id(db, itinerary.id, tourist_id)
 
     async def get_export_data(
         self,
@@ -782,6 +823,8 @@ class ItineraryRepository(BaseRepository):
 
     def _to_response(self, itinerary: Itinerary) -> ItineraryResponse:
         start_date = itinerary.start_date
+        is_past = self._is_past_itinerary(itinerary)
+        is_editable = self._is_editable_itinerary(itinerary)
         return ItineraryResponse(
             id=itinerary.id,
             tourist_id=itinerary.tourist_id,
@@ -789,6 +832,8 @@ class ItineraryRepository(BaseRepository):
             start_date=start_date,
             end_date=itinerary.end_date,
             status=itinerary.status,
+            is_past=is_past,
+            is_editable=is_editable,
             steps=[
                 self._step_to_response(step, start_date)
                 for step in itinerary.steps
