@@ -211,8 +211,6 @@ class ItineraryRepository(BaseRepository):
         if itinerary is None:
             return False
 
-        self._ensure_itinerary_editable(itinerary)
-
         try:
             result = await db.execute(
                 delete(Itinerary)
@@ -390,10 +388,11 @@ class ItineraryRepository(BaseRepository):
             # compact orders directly (for example 13 -> 12 while another row is
             # still 12), PostgreSQL checks the constraint per statement/flush and
             # can raise a transient UniqueViolation. Move all remaining rows to a
-            # temporary negative namespace first, flush, then assign the final
+            # temporary high-offset namespace first, flush, then assign the final
             # compact positive order.
+            OFFSET = 100_000
             for index, remaining_step in enumerate(remaining_steps, start=1):
-                remaining_step.step_order = -index
+                remaining_step.step_order = OFFSET + index
             await db.flush()
 
             for index, remaining_step in enumerate(remaining_steps, start=1):
@@ -423,9 +422,10 @@ class ItineraryRepository(BaseRepository):
 
         steps_by_id = {step.id: step for step in itinerary.steps}
 
+        OFFSET = 100_000
         try:
             for index, step_id in enumerate(step_ids, start=1):
-                steps_by_id[step_id].step_order = -index
+                steps_by_id[step_id].step_order = OFFSET + index
             await db.flush()
 
             for index, step_id in enumerate(step_ids, start=1):
@@ -585,8 +585,9 @@ class ItineraryRepository(BaseRepository):
                     if new_departure is not None:
                         cursor_minutes = (new_departure.hour * 60 + new_departure.minute) + GAP_MINUTES
 
+            OFFSET = 100_000
             for index, sp in enumerate(payload.steps, start=1):
-                steps_by_id[sp.step_id].step_order = -index
+                steps_by_id[sp.step_id].step_order = OFFSET + index
             await db.flush()
 
             for index, sp in enumerate(payload.steps, start=1):

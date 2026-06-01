@@ -1,0 +1,279 @@
+{
+  "source": "CONAF (curado + scraped de conaf.cl)",
+  "source_url": "https://www.conaf.cl/parque_nacionales-sitemap.xml",
+  "total_parks": 8,
+  "protected_areas": [
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "Se encuentra dentro de las comunas de Villarrica, Pucón, Curarrehue (Región de La Araucanía) y Panguipulli (Región de Los Ríos). Fue creado el 28 de noviembre de 1940 por Decreto Supremo 2236 del Ministerio de Tierras y Colonización. Protege 53 460 ha donde se pueden encontrar diversas especies y ecosistemas. Esta unidad es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en el año 1983 Flora destacada: En cuanto a flora se pueden encontrar bosques de araucaria ( Araucaria araucana ), además de especies como lenga ( Nothofagus pumilio ), ñirre ( Nothofagus antarctica ), coigüe ( Nothofagus dombeyi ), raulí ( Nothofagus alpina ), mañío ( Podocarpus nubigenus ), ciprés de la cordillera ( Austrocedrus chilensis ), notro ( Embothrium coccineum ), chauras ( Gaultheria mucronata ), chilco ( Fuchsia magellanica ), quinchamalí ( Quinchamalium chilense ), taique ( Desfontainia spinosa ), amancay ( Alstroemeria aurea ) y frutilla silvestre ( Fragaria chiloensis ) y los hongos gomitas del bosque ( Guepiniopsis alpina ) y gargal ( Grifola gargal ), entre otras. Fauna silvestre: La unidad destaca por la protección de las especies de fauna como el degú de Bridges ( Octodon bridgesi ), el halcón peregrino ( Falco peregrinus ), lagarto matuasto ( Phymaturus palluma ), ranita de Darwin ( Rhinoderma darwinii ) y la percatrucha ( Percichthys trucha ). También se encuentra presente zorro culpeo ( Lycalopex culpaeus ), zorro chilla ( Lycalopex griseus ), puma ( Puma concolor ), güiña ( Leopardus guigna ), carpintero negro ( Campephilus magellanicus ), carpinterito ( Veniliornis lignarius ), rayadito ( Aphrastura spinicauda ), comesebo, cóndor ( Vultur gryphus ), sapito cuatro ojos ( Pleurodema thaul ) y ranita de hojarasca ( Eupsophus calcaratus ). Servicios: El Parque Nacional Villarrica cuenta con canchas de esquí, senderos, áreas de picnic, mirador, camping y arriendo de caballos. \n\nExisten zonas de picnic.\n\nNo existen zonas para acampar.\n\nEl parque cuenta con servicios de accesibilidad universal en la Región de La Araucanía :\n \nsistema de cuerdas par.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "access_routes": "Región de La Araucanía: \n\n ﻿Sector Puesco: \n\nDesde Temuco debes tomar la Ruta 5 Sur para conectar con la ruta 199. Pasarás por Villarrica, Pucón y Curarrehue. Debes continuar por ruta Internacional y llegaras al sector de Puesco. Punto de referencia: acceder al Paso fronterizo Mamuil Malal.\n\n Sector Rucapillan: \n\nDesde Temuco debes tomar Ruta 5 Sur y conectar con ruta 199, (112 km) pasar por Villarrica y antes de ingresar a Pucón debes tomar el Camino al volcán. Desde la ciudad son 8 kilómetros hasta llegar a la caseta de control de CONAF (final del asfalto), donde debes detenerte a recibir información y registrar tu visita.\n\n Sector Quetrupillan: \n\nDesde Pucón debes tomar el camino Internación hacia Curarrehue (ruta 199) hasta la localidad de Palguín donde encontrarás un letrero orientando el desvío hacia el parque. Desde la carretera son 17 kilómetros hasta la caseta de control de CONAF.\n\n Sector Huincacara: \n\nDesde Villarrica debes tomar el camino en dirección hacia Lican Ray o Coñaripe (S-95-T). Debes tomar el desvío en el kilómetro 7,6 desde Villarrica. Desde el desvío de la carretera son 22 kilómetros hasta la caseta de control de CONAF. \n\n Región de Los Ríos: \n\n Sector Los Cajones: \n\nEl acceso es por el Sector Los Cajones, en la localidad de Coñaripe de la comuna de Panguipulli. Camino asfaltado desde Coñaripe en 15 km, y de ripio los próximos 13.",
+        "recommendations": "Hay probabilidades de encuentros con fauna potencialmente peligrosa: pumas, roedores vectores de hantavirus, insectos.\n\nTenga en cuenta que en este parque hay posibilidad de experimentar actividad volcánica. \n\nTenga precaución con posibles avalanchas en invierno.\n\nDebe usar vestimenta adecuada para la estación (zapatos de excursión, ropa impermeable, bastones, etc.)"
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "El Parque Nacional Conguillío está ubicado en la Región de La Araucanía, en las comunas de Curacautín, Lonquimay, (provincia de Malleco), Vilcún, Cunco y Melipeuco (provincia de Cautín). Fue creado el 26 de mayo de 1950 mediante Decreto Supremo 1117 del Ministerio de Tierras y Colonización. Ha sufrido posteriores modificaciones, por causa de diferentes decretos. Esta unidad es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en 1983 Flora destacada: Destacan la araucaria ( Araucaria araucana ), ciprés de la cordillera ( Austrocedrus chilensis ), lleuque ( Prumnopitys andina ), radal enano ( Orites myrtoidea ) y canelo andino ( Drimys andina ), entre otras especies. Fauna silvestre: Se encuentran especies como el puma ( Puma concolor ), guiña ( Leopardus guigna ), carpintero negro ( Campephilus magellanicus ), monito del monte ( Dromiciops gliroides ), lagartija café de rayas, ranita de Darwin ( Rhinoderma darwinii ) y el tollo de agua dulce ( Diplomystes chilensis ), entre otras. Servicios: El Parque Nacional Conguillío cuenta en temporada estival con venta de alimentos, arriendo de káyak y botes, arriendo de cabañas, sitios de camping y áreas de picnic, las que se encuentran abiertas hasta mediados de otoño, dependiendo de las condiciones climáticas.\n\nExiste infraestructura de acceso .",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Travesía Río Blanco",
+            "longitud": "3,74 km.",
+            "duracion_del_trayecto": "(ida) 8 horas.",
+            "dificultad_de_caminata": "muy difícil.",
+            "dificultad_de_caminata_invernal": "muy difícil.",
+            "riesgos_del_sector": "rayos y desprendimientos de roca (mayo-noviembre), eventuales encuentros con jabalíes y avispas chaqueta amarilla."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "A la unidad se puede acceder desde el sur por la ruta Temuco-Cunco-Melipeuco al sector Truful Truful, desde el norte por Victoria o Lautaro-Curacautín al sector Captrén. \n\nPor el lado occidental desde Temuco-Cajón-Vilcún-Cherquenco al sector Los Paraguas.",
+        "recommendations": "Existe fauna potencialmente peligrosa: roedores que pueden transmitir hantavirus, pumas, jabalíes y avispas chaqueta amarilla.\n\nSe recomienda precaución con posibles desprendimientos de ramas y de roca, caída de árboles, avalanchas y rayos. \n\nDebe usar vestimenta adecuada para la estación (zapatos de excursión, ropa impermeable, bastones, etc.)"
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "La Reserva Nacional Nalcas, creada el año 1967 por el Decreto Supremo 604 del Ministerio de Agricultura, se encuentra ubicada comuna de Lonquimay, provincia de Malleco, Región de La Araucanía. Limita al sur con la Reserva Nacional Malalcahuello. Actualmente la Reserva Nacional Nalcas cuenta con una superficie de 13.755 hectáreas y es parte de las 10 unidades del SNASPE que forman las Zonas Núcleo de la Reserva de la Biósfera Las Araucarias Flora destacada: Es posible encontrar la formación de bosques caducifolios altoandinos, con especies como araucaria ( Araucaria araucana ) y ciprés de la cordillera ( Austrocedrus chilensis ). Fauna silvestre: Entre las especies de mamíferos presentes se encuentran: güiña ( Leopardus guigna ), vizcacha de montaña ( Lagidium viscacia ), quique ( Galictis cuja ) y puma ( Puma concolor ), entre otras.\n\nLas especies de aves posibles de observar incluyen al halcón peregrino ( Falco peregrinus ), becacina ( Gallinago magellanica ), torcaza ( Patagioenas araucana ), carpintero negro ( Campephilus magellanicus ), cóndor ( Vultur gryphus ), peuquito ( Accipiter chilensis ), aguilucho de cola rojiza ( Buteo ventralis ) y aguilucho chico ( Buteo albigula ), entre otras.\n \nSenderos habilitados\n \n Sendero Tolhuaca \n\nLongitud: 22 km.\n\nDuración del trayecto (ida): 10 horas.\n\nDificultad de caminata: exigente.\n\nRiesgos del sector: desprendimiento de ramas, rayos (noviembre-abril).\n\n Sendero Laguna La Holandesa \n\nLongitud: 5,9 km.\n\nDuración del trayecto (ida): 3 horas.\n\nDificultad de caminata: media.\n\nRiesgos del sector: desprendimiento de ramas (noviembre-abril).\n\n Sendero Laguna La Totora \n\nLongitud: 1 km.\n\nDuración del trayecto (ida): 30 minutos.\n\nDificultad de caminata: fácil.\n\n Sendero Cráter Navidad \n\nLongitud: 1,8 km.\n\nDuración del trayecto (ida): 1 hora.\n\nDificultad de caminata: exigente.\n\nRiesgos del sector: desprendimiento de rocas (noviembre-abril), erupción volcánica.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Tolhuaca",
+            "longitud": "22 km.",
+            "duracion_del_trayecto": "(ida) 10 horas.",
+            "dificultad_de_caminata": "exigente.",
+            "riesgos_del_sector": "desprendimiento de ramas, rayos (noviembre-abril)."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "Distancia a 180 km de Temuco, la capital regional. El principal acceso es la ruta que parte de Victoria o Lautaro-Curacautín, 56 km, Curacautín a km 5-río Blanco-fundo Los Prados-Villucura, camino de uso estival, de acceso difícil por las fuertes pendientes con escoriales, transitable solo para vehículos de doble tracción.\n\nDesde Malalcahuello por volcán Lonquimay a Lolco 20 km, camino de escoria y tierra de uso estival, solo apto para vehículos de doble tracción.\n\nDesde Malalcahuello, por cuesta Las Raíces, mallín del Treile-Las Mellizas al Lancu, por el interior de la Comunidad Bernardo Ñanco, 47 km, el camino es de uso estival y de preferencia para vehículos de doble tracción.",
+        "recommendations": "Debe usar vestimenta acorde a la estación (zapatos de excursión, ropa impermeable, abrigo por capas, etc.)\n\nPueden registrarse desprendimiento de ramas, caída de rocas, rayos, erupción volcánica."
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "La Reserva Nacional Villarrica o Hualalafquén está ubicada en la Región de La Araucanía, en las comunas de Melipeuco, Cunco, Pucón y Curarrehue, provincia de Cautín. Fue creada mediante el Decreto Supremo 1722 del Ministerio de Industrias y Obras Públicas el 18 de octubre de 1912, con los sobrantes de terrenos fiscales que quedaron después de otorgarle título de dominio definitivo a la Sociedad Ganadera Lanín. Esta unidad es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en el año 1983 Flora destacada: Es posible encontrar especies de flora con problemas de conservación como araucaria ( Araucaria araucana ) en estado de conservación vulnerable; ciprés de la cordillera ( Austrocedrus chilensis ), estado de conservación vulnerable; maitén del Chubut ( Maytenus chubutensis ), especie catalogada en estado de conservación rara; y lleuque o uva de cordillera ( Prumnopitys andina ). Fauna silvestre: Entre los mamíferos se encuentran güiña ( Leopardus guigna ), degú de Bridges ( Octodon bridgesi ), quique ( Galictis cuja ), puma ( Puma concolor ), pudú ( Pudu puda ), ratón topo valdiviano ( Geoxus valdivianus ), zorro culpeo ( Lycalopex culpaeus ) y zorro chilla ( Lycalopex griseus ). En las aves figuran halcón peregrino ( Falco peregrinus ), becacina ( Gallinago magellanica ), torcaza ( Patagioenas araucana ), carpintero negro ( Campephilus magellanicus ), cóndor ( Vultur gryphus ), peuquito ( Accipiter chilensis ), aguilucho de cola rojiza ( Buteo ventralis ), aguilucho chico ( Buteo albigula ), concón ( Strix rufipes ), nuco ( Asio flammeus ) y pato cortacorrientes ( Merganetta armata ), entre otras. Dentro de los reptiles encontramos al lagarto matuasto ( Phymaturus palluma ) y la culebra de cola corta ( Tachymenis chilensis ). De los anfibios, destacan la ranita de Darwin ( Rhinoderma darwinii ) y el sapito de cuatro ojos ( Pleurodema thaul ). Servicios: Hay caseta de control CONAF con baños públicos al inicio del sendero hacia el sendero nevados de Sollipulli, también cuenta con un sendero hacia laguna Hualalafquén. Hay cabañas particulares cerca del ingreso de nevados de Sollipulli.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Cochor",
+            "longitud": "6,2 km.",
+            "duracion_del_trayecto": "(ida) 3 horas.",
+            "dificultad_de_caminata": "media.",
+            "dificultad_de_caminata_invernal": "moderada.",
+            "riesgos_del_sector": "desprendimiento de ramas (junio-octubre)."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "Dista a 40 km de la ciudad de Pucón y a 162 km de Temuco, la capital regional. El principal acceso es la ruta internacional 199-CH de Pucón a Curarrehue (asfaltado) y el resto es de ripio y transitable todo el año, salvo en algunos sectores al interior de la unidad durante el invierno, por acumulación de nieve.\n\n Para acceder a Quelhue se toma camino a Pucón-Tres Esquinas-pasarela vehicular-río Trancura-comunidad Huaiquifil. Para acceder a Quilembre se toma el camino de Pucón al lago Caburgua, desviándose hacia el sector playa Blanca y este al interior a través de una huella.\n\nPara acceder a Hualalafquén se toma camino de ripio desde Curarrehue directamente al sector, con una distancia de 12 km. Otra vía también parte de Curarrehue por camino hacia la localidad fronteriza de Reigolil, cuya distancia es de 40 km y de allí se desvía por camino de tierra a Hualalafquén.\n\n Para acceder al sector de Sollipulli, Desde Temuco tomar la ruta S-61 que se interna hacia el este. Llegar hasta la localidad de Melipeuco. Desde allí continuar en dirección este. Se debe avanzar en dirección al sector de Alpehué (ruta S-563). Avanzar 1,5 km hasta que aparezca a la izquierda (este) un nuevo camino con el letrero “reserva nacional Villarica” (ruta S-575). Este camino se interna bajo el cerro que separa los valles de Alpehué y el que proviene desde la laguna Icalma. A 10,5km se cruza el río Allipén y luego se asciende por una cuesta complicada para vehículos con tracción simple. En la cuesta se pasa por el canopy Huechelepún y en 3km más se alcanza el puente que cruza el río afluente del Allipén. En ese punto, aparece la caseta de Conaf marcando la entrada a la reserva nacional Villarrica.\n\nFuera del área existe locomoción tres veces al día desde Curarrehue a Reigolil y viceversa.\n\nPor Melipeuco no hay buses de acercamiento a Sollipulli.",
+        "recommendations": "Debe usar vestimenta acorde a la estación (zapatos de excursión, ropa impermeable, abrigo por capas, etc.)\n\nFauna potencialmente peligrosa: pumas y roedores vectores de hantavirus.\n\nPueden registrarse desprendimiento de ramas, caída de rocas, rayos o erupción volcánica."
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "La reserva nacional está ubicada en la Región de La Araucanía, comunas de Lonquimay (provincia de Malleco) y Melipeuco (provincia de Cautín). Fue creada el 28 de junio de 1968 por Decreto Supremo 330 del Ministerio de Agricultura. El área es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en el año 1983 Flora destacada: En su interior están presentes especies nativas como araucaria ( Araucaria araucana ), ciprés de la cordillera ( Austrocedrus chilensis ) y lleuque ( Prumnopitys andina ). Fauna silvestre: La reserva destaca por la protección de especies de fauna como puma ( Puma concolor ), torcaza ( Patagioenas araucana ), culebra de cola corta ( Tachymenis chilensis ) y sapito de cuatro ojos ( Pleurodema thaul ). Servicios: Cuenta con senderos.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Huella del Puma",
+            "longitud": "3,6 km.",
+            "duracion_del_trayecto": "(ida) 3,5 horas.",
+            "dificultad_de_caminata": "media.",
+            "riesgos_del_sector": "rayos (diciembre-febrero)."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "Desde Temuco, dirigirse a Melipeuco. De esa localidad debe ir a 35 km con dirección hacia Icalma y tomar el cruce hacia el camino conocido como Cabeza de Indio, habilitado para todo tipo de vehículo desde noviembre a abril. Desde mayo en adelante la unidad permanece cerrada por condiciones de nieve de la ruta.",
+        "recommendations": "Debe usar vestimenta acorde a la estación (zapatos de excursión, ropa impermeable, abrigo por capas, etc.)\n\nExiste probabilidad de encontrar pumas y jabalíes.\n\nPueden registrarse tormentas secas en verano (rayos)."
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "La Reserva Nacional Alto Biobío está ubicada en la Región de La Araucanía, provincia de Malleco, comuna de Lonquimay. Fue creada el 6 de noviembre de 1912 por Decreto Supremo 1935 del Ministerio de Relaciones Exteriores. Esta unidad es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en el año 1983 Flora destacada: En cuanto a flora, una de las asociaciones características de presenciar al interior de la reserva es la estepa de altura con araucaria ( Araucaria araucana ). También se encuentra ñirre ( Nothofagus antarctica ) y lenga ( Nothofagus pumilio ). Fauna silvestre: La unidad destaca por la protección de las especies de fauna como el guanaco ( Lama guanicoe ), carpintero negro ( Campephilus magellanicus ), culebra de cola corta ( Tachymenis chilensis ) y sapito de cuatro ojos ( Pleurodema thaul ). Servicios: Actualmente esta unidad mantiene convenios vigentes con comunidades locales para el desarrollo de ganadería a pequeña escala. No cuenta con senderos.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Cuchares Grande",
+            "longitud": "11,6 km.",
+            "duracion_del_trayecto": "(ida) 5 horas.",
+            "dificultad_de_caminata": "exigente.",
+            "riesgos_del_sector": "desprendimiento de rocas, rayos y alto tránsito por la ruta internacional."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "A la unidad se puede acceder por la ruta internacional de Victoria o Lautaro-Curacautín-Malalcahuello-túnel Las Raíces-Lonquimay-Liucura-paso Pino Hachado.",
+        "recommendations": "Debe usar vestimenta acorde a la estación (zapatos de excursión, ropa impermeable, abrigo por capas, etc.)\n\nTenga precaución con desprendimiento de rocas, rayos y alto tránsito por la ruta internacional."
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "La Reserva Nacional Malalcahuello está ubicada en la Región de La Araucanía, provincia de Malleco, comuna de Curacautín. Fue creada el 31 de marzo de 1931, mediante el Decreto Supremo 1670 del Ministerio de la Propiedad Austral. Ha sufrido posteriores modificaciones, por causa de diferentes decretos.\n\nEsta unidad es parte de la Reserva de Biósfera Araucarias, creada por la UNESCO en 1983 Flora destacada: La unidad destaca por la protección de especies nativas como araucaria ( Araucaria araucana ), coigüe ( Nothofagus dombeyi ), roble ( Nothofagus obliqua ), lenga ( Nothofagus pumilio ) y ñirre ( Nothofagus anctartica ), entre otras. Fauna silvestre: En su interior se encuentra puma ( Puma concolor ), güiña ( Leopardus guigna ), pudú ( Pudu puda ), zorro culpeo ( Lycalopex cupaeus ), aguilucho ( Geranoaetus polyosoma ) y carpintero negro ( Campephilus magellanicus ), entre otras. Servicios: La reserva cuenta con miradores y servicios sanitarios básicos. No cuenta con zonas para acampar.\n\nCuenta con un centro de esquí concesionado a Corralco S.A.\n\nPara información sobre los servicios que presta el centro de esquí Corralco, visite la página: https://corralco.com/ .\n\n Hotel Valle Corralco.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Cerro Cautín",
+            "longitud": "4,4 km.",
+            "duracion_del_trayecto": "(ida) 2,5 horas.",
+            "dificultad_de_caminata": "exigente.",
+            "riesgos_del_sector": "desprendimiento de rocas, rayos (noviembre-abril)."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "El principal acceso a la unidad es por la Ruta 5 Sur desde Victoria a Curacautín, y desde allí 30 km hasta la localidad de Malalcahuello, siendo esta ubicada en el km 87,5 por la Ruta Internacional 181. Es un camino totalmente asfaltado.",
+        "recommendations": "Debe usar vestimenta acorde a la estación (zapatos de excursión, ropa impermeable, abrigo por capas, etc.)\n\nHay probabilidad de desprendimientos de rocas y ramas.\n\nPueden registrarse tormentas secas en verano (rayos)."
+      }
+    },
+    {
+      "name": "de Análisis y Diagnóstico",
+      "type": "",
+      "latitude": null,
+      "longitude": null,
+      "region": "La Araucanía",
+      "commune": "",
+      "area_hectares": null,
+      "website": null,
+      "description": "El Monumento Natural Cerro Ñielol está ubicado en la Región de La Araucanía, provincia de Cautín, comuna de Temuco. Fue creado como Parque Nacional de Turismo Cerro Ñielol el 20 de marzo de 1939, por Decreto Supremo 504 del Ministerio de Tierras y Colonización. Ha sufrido posteriores modificaciones, por causa de diferentes decretos Flora destacada: En lo que a flora se refiere, están las especies arbóreas huillipatagua ( Citronella mucronata ), olivillo ( Aextoxicon punctatum ), canelo ( Drimys winteri ), lleuque ( Prumnopitys andina ), lingue ( Persea lingue ), tineo ( Weinmannia trichosperma ) y peumo ( Cryptocarya alba ), entre otras. También es posible encontrar copihue ( Lapageria rosea ), así como diversas enredaderas y helechos. Fauna silvestre: La unidad destaca por la protección de especies de fauna como zorro culpeo ( Lycalopex culpaeus ), aguilucho de cola rojiza ( Buteo ventralis ), torcaza ( Patagioenas araucana ), colibrí ( Sephanoides sephaniodes ), rayadito ( Aphrastura spinicauda ), comesebo ( Pygarrhichas albogularis ), zorzal ( Turdus falcklandii ), culebra de cola corta ( Tachymenis chilensis ) y sapito de cuatro ojos ( Pleurodema thaul ), entre otras. Servicios: El monumento cuenta con un área de picnic, cinco miradores y un centro de información ambiental.\n\nAcceso universal:\n \nsenderos accesibles para personas con discapacidad motriz;\n\nplacas educativas en sistema braille;\n\nbaños accesibles.",
+      "visit_rules": {
+        "is_primary_experience": true,
+        "requires_daylight": true,
+        "night_suitable": false,
+        "latest_recommended_start_time": "15:30",
+        "access_notes": "Area silvestre protegida CONAF. Verificar horarios en pasesparques.cl.",
+        "confidence": "known",
+        "source": "CONAF",
+        "area_type": null,
+        "region": null,
+        "commune": null,
+        "trails": [
+          {
+            "name": "Agua Santa",
+            "longitud": "648 m.",
+            "duracion_del_trayecto": "(ida) 45 minutos.",
+            "dificultad_de_caminata": "fácil.",
+            "riesgos_del_sector": "desprendimiento de ramas, roedores vectores de hantavirus."
+          }
+        ],
+        "num_trails": 1,
+        "access_routes": "A la unidad se puede acceder por calle Arturo Prat, siendo el tramo inicial de un solo sentido en ascenso y un camino de descenso que conecta con calle Lynch, ambos pavimentados.",
+        "recommendations": "Existen roedores que son potenciales transmisores de hantavirus.\n\nDebe vestir con ropa adecuada (zapatillas de excursión, ropa impermeable).\n\nPueden desprenderse ramas en los senderos durante el invierno."
+      }
+    }
+  ]
+}

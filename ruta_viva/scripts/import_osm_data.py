@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 import time
@@ -17,6 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+REGIONS_DIR = ROOT_DIR / "regions"
+
 import app.db.models  # noqa: F401
 from app.db.session import AsyncSessionLocal, init_db
 from app.models.category import Category
@@ -31,6 +34,37 @@ EMBEDDING_DELAY_SECONDS = 0.5
 DEFAULT_LIMIT = 1000
 DEFAULT_BATCH_SIZE = 10
 ARAUCANIA_BBOX = "(-39.90,-73.80,-37.35,-70.75)"
+
+_region_config: dict[str, Any] | None = None
+
+
+def load_region_config(region: str) -> dict[str, Any]:
+    global _region_config
+    config_path = REGIONS_DIR / f"{region}.json"
+    if not config_path.exists():
+        logger = logging.getLogger("osm_import")
+        logger.warning("Config de region '%s' no encontrada en %s, usando defaults de La Araucania.", region, config_path)
+        _region_config = {}
+        return _region_config
+    with config_path.open("r", encoding="utf-8") as f:
+        _region_config = json.load(f)
+    return _region_config
+
+
+def get_region_config() -> dict[str, Any]:
+    return _region_config or {}
+
+
+def get_region_bbox() -> str:
+    config = get_region_config()
+    bbox = config.get("bbox")
+    if bbox:
+        return f"({bbox['south']},{bbox['west']},{bbox['north']},{bbox['east']})"
+    return ARAUCANIA_BBOX
+
+
+def get_region_description_suffix() -> str:
+    return get_region_config().get("description_suffix", "en la Región de La Araucanía, Chile")
 
 FOOD_AMENITIES = {
     "restaurant",
@@ -250,6 +284,11 @@ class EmbeddingRateLimiter:
 
 
 def build_overpass_queries() -> list[str]:
+    config = get_region_config()
+    iso_code = config.get("iso3166_2", "CL-AR")
+    wikidata = config.get("wikidata_id", "Q2170")
+    admin_name = config.get("admin_level_name", "Araucanía|Araucania")
+    bbox = get_region_bbox()
     selectors = """
   nwr["tourism"](area.searchArea);
   nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|arts_centre|cinema|community_centre|events_venue|library|theatre|marketplace|bus_station|ferry_terminal|parking|taxi|bicycle_rental|car_rental|fuel|charging_station|toilets|shower|drinking_water|public_bath|bank|atm|bureau_de_change|pharmacy|hospital|clinic|doctors|dentist|police|post_office|ranger_station|grave_yard|crematorium"](area.searchArea);
@@ -270,29 +309,29 @@ def build_overpass_queries() -> list[str]:
   nwr["information"](area.searchArea);
 """.strip()
     bbox_selectors = f"""
-  nwr["tourism"]{ARAUCANIA_BBOX};
-  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|arts_centre|cinema|community_centre|events_venue|library|theatre|marketplace|bus_station|ferry_terminal|parking|taxi|bicycle_rental|car_rental|fuel|charging_station|toilets|shower|drinking_water|public_bath|bank|atm|bureau_de_change|pharmacy|hospital|clinic|doctors|dentist|police|post_office|ranger_station|grave_yard|crematorium"]{ARAUCANIA_BBOX};
-  nwr["leisure"~"park|nature_reserve|garden|picnic_table|playground|sports_centre|stadium|swimming_pool|swimming_area|water_park|track|pitch|marina|fishing|firepit|bird_hide|dog_park|common"]{ARAUCANIA_BBOX};
-  nwr["natural"~"bay|beach|cave_entrance|cliff|forest|geyser|glacier|hot_spring|peak|peninsula|reef|rock|saddle|spring|stone|tree|volcano|water|wetland|wood"]{ARAUCANIA_BBOX};
-  nwr["historic"]{ARAUCANIA_BBOX};
-  nwr["shop"~"alcohol|bakery|books|butcher|chocolate|coffee|confectionery|convenience|craft|deli|farm|greengrocer|mall|outdoor|pastry|seafood|sports|supermarket|souvenir|tea|travel_agency|wine"]{ARAUCANIA_BBOX};
-  nwr["craft"]{ARAUCANIA_BBOX};
-  nwr["sport"]{ARAUCANIA_BBOX};
-  nwr["man_made"~"beacon|bridge|cross|lighthouse|obelisk|observatory|pier|survey_point|tower|water_tower|watermill"]{ARAUCANIA_BBOX};
-  nwr["waterway"]{ARAUCANIA_BBOX};
-  nwr["place"~"city|town|village|hamlet|locality|suburb|neighbourhood|isolated_dwelling"]{ARAUCANIA_BBOX};
-  nwr["landuse"~"cemetery|industrial|landfill"]{ARAUCANIA_BBOX};
-  nwr["highway"="bus_stop"]{ARAUCANIA_BBOX};
-  nwr["railway"~"station|halt"]{ARAUCANIA_BBOX};
-  nwr["public_transport"]{ARAUCANIA_BBOX};
-  nwr["route"~"hiking|bicycle|mtb|foot|horse"]{ARAUCANIA_BBOX};
-  nwr["information"]{ARAUCANIA_BBOX};
+  nwr["tourism"]{bbox};
+  nwr["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|arts_centre|cinema|community_centre|events_venue|library|theatre|marketplace|bus_station|ferry_terminal|parking|taxi|bicycle_rental|car_rental|fuel|charging_station|toilets|shower|drinking_water|public_bath|bank|atm|bureau_de_change|pharmacy|hospital|clinic|doctors|dentist|police|post_office|ranger_station|grave_yard|crematorium"]{bbox};
+  nwr["leisure"~"park|nature_reserve|garden|picnic_table|playground|sports_centre|stadium|swimming_pool|swimming_area|water_park|track|pitch|marina|fishing|firepit|bird_hide|dog_park|common"]{bbox};
+  nwr["natural"~"bay|beach|cave_entrance|cliff|forest|geyser|glacier|hot_spring|peak|peninsula|reef|rock|saddle|spring|stone|tree|volcano|water|wetland|wood"]{bbox};
+  nwr["historic"]{bbox};
+  nwr["shop"~"alcohol|bakery|books|butcher|chocolate|coffee|confectionery|convenience|craft|deli|farm|greengrocer|mall|outdoor|pastry|seafood|sports|supermarket|souvenir|tea|travel_agency|wine"]{bbox};
+  nwr["craft"]{bbox};
+  nwr["sport"]{bbox};
+  nwr["man_made"~"beacon|bridge|cross|lighthouse|obelisk|observatory|pier|survey_point|tower|water_tower|watermill"]{bbox};
+  nwr["waterway"]{bbox};
+  nwr["place"~"city|town|village|hamlet|locality|suburb|neighbourhood|isolated_dwelling"]{bbox};
+  nwr["landuse"~"cemetery|industrial|landfill"]{bbox};
+  nwr["highway"="bus_stop"]{bbox};
+  nwr["railway"~"station|halt"]{bbox};
+  nwr["public_transport"]{bbox};
+  nwr["route"~"hiking|bicycle|mtb|foot|horse"]{bbox};
+  nwr["information"]{bbox};
 """.strip()
 
     return [
         f"""
 [out:json][timeout:{OVERPASS_TIMEOUT_SECONDS}];
-area["boundary"="administrative"]["ISO3166-2"="CL-AR"]->.searchArea;
+area["boundary"="administrative"]["ISO3166-2"="{iso_code}"]->.searchArea;
 (
 {selectors}
 );
@@ -300,7 +339,7 @@ out center tags qt;
 """.strip(),
         f"""
 [out:json][timeout:{OVERPASS_TIMEOUT_SECONDS}];
-area["boundary"="administrative"]["wikidata"="Q2170"]->.searchArea;
+area["boundary"="administrative"]["wikidata"="{wikidata}"]->.searchArea;
 (
 {selectors}
 );
@@ -308,7 +347,7 @@ out center tags qt;
 """.strip(),
         f"""
 [out:json][timeout:{OVERPASS_TIMEOUT_SECONDS}];
-area["boundary"="administrative"]["admin_level"="4"]["name"~"Araucanía|Araucania"]->.searchArea;
+area["boundary"="administrative"]["admin_level"="4"]["name"~"{admin_name}"]->.searchArea;
 (
 {selectors}
 );
@@ -536,14 +575,26 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
     if amenity in CRAFT_AMENITIES or shop in {"craft", "souvenir"} or craft or "artesanía" in lower_name or "artesania" in lower_name:
         category_names.append("Artesanía/Compras locales")
     if shop in RELEVANT_SHOPS and shop not in {"craft", "souvenir"}:
-        category_names.append("Turismo")
+        if shop in {"bakery", "chocolate", "coffee", "confectionery", "deli", "pastry", "seafood", "tea", "wine"}:
+            category_names.append("Gastronomía")
+        elif shop in {"sports", "outdoor"}:
+            category_names.append("Aventura/Deportes")
+        elif shop == "books":
+            category_names.append("Cultura")
+        elif shop == "travel_agency":
+            category_names.append("Servicios turísticos/Información")
+        else:
+            category_names.append("Artesanía/Compras locales")
     if amenity in CULTURE_AMENITIES or historic:
         category_names.append("Cultura")
         category_names.append("Museos/Patrimonio")
     if man_made in RELEVANT_MAN_MADE:
-        category_names.append("Turismo")
         if man_made in {"tower", "observatory", "lighthouse", "survey_point"}:
             category_names.append("Montañas/Volcanes/Miradores")
+        elif man_made in {"cross", "obelisk"}:
+            category_names.append("Cultura")
+        else:
+            category_names.append("Turismo")
     if landuse in {"industrial", "landfill"}:
         category_names.append("Servicios turísticos/Información")
     if tourism in INFORMATION_TOURISM or "conaf" in lower_name or "información" in lower_name or "informacion" in lower_name:
@@ -561,7 +612,19 @@ def infer_category_names(tags: dict[str, str]) -> list[str]:
         category_names.append("Turismo")
 
     if not category_names:
-        category_names.append("Turismo")
+        lower_name = name.lower()
+        if any(kw in lower_name for kw in ("termas", "spa", "bienestar", "relax")):
+            category_names.append("Termas/Bienestar")
+        elif any(kw in lower_name for kw in ("lago", "río", "rio", "playa", "salto")):
+            category_names.append("Lagos/Ríos/Playas")
+        elif any(kw in lower_name for kw in ("parque", "reserva", "monumento")):
+            category_names.append("Parques/Reservas")
+        elif any(kw in lower_name for kw in ("museo", "galería", "patrimonio")):
+            category_names.append("Museos/Patrimonio")
+        elif any(kw in lower_name for kw in ("artesanía", "feria", "mercado")):
+            category_names.append("Artesanía/Compras locales")
+        else:
+            category_names.append("Turismo")
 
     deduped: list[str] = []
     for name in category_names:
@@ -1055,7 +1118,7 @@ def build_description(name: str, tags: dict[str, str]) -> str:
         CATEGORY_DESCRIPTIONS["Turismo"],
     )
 
-    base = f"{name} es un lugar descrito como {place_type} en la Región de La Araucanía, Chile. {fallback_desc}"
+    base = f"{name} es un lugar descrito como {place_type} {get_region_description_suffix()}. {fallback_desc}"
     if locality:
         base += f" Se ubica o referencia en el sector de {locality}."
     if cuisine and _humanize_list(cuisine) not in place_type:
@@ -1361,7 +1424,7 @@ async def import_place(
                     await rate_limiter.wait_turn()
                     if embedding_service is None:
                         raise RuntimeError("Embedding service is not initialized.")
-                    embedding = await embedding_service.get_embedding(place.description)
+                    embedding = await embedding_service.get_embedding(f"{place.name}. {place.description}")
 
                 await update_existing_osm_poi(
                     db,
@@ -1382,7 +1445,7 @@ async def import_place(
         if embedding_service is None:
             raise RuntimeError("Embedding service is not initialized.")
 
-        embedding = await embedding_service.get_embedding(place.description)
+        embedding = await embedding_service.get_embedding(f"{place.name}. {place.description}")
 
         async with AsyncSessionLocal() as db:
             await create_osm_poi(
@@ -1491,8 +1554,10 @@ def configure_logging() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Importa POIs reales de la Región de La Araucanía desde OpenStreetMap usando Overpass.",
+        description="Importa POIs reales desde OpenStreetMap usando Overpass.",
     )
+    parser.add_argument("--region", type=str, default="araucania",
+                       help="Region de Chile a importar (nombre del archivo en regions/, default: araucania).")
     parser.add_argument(
         "--limit",
         type=int,
@@ -1537,6 +1602,7 @@ async def main() -> None:
 
     configure_logging()
     args = parse_args()
+    load_region_config(args.region)
     embedding_service = get_embedding_service()
 
     if args.limit <= 0:

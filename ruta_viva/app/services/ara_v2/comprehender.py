@@ -197,6 +197,8 @@ def normalize_comprehension_payload(payload: Any) -> Any:
             reply = dict(raw_reply)
             reply_type = _normalize_enum(reply.get("type") or "refinement")
             reply["type"] = reply_type if reply_type in _VALID_QUICK_REPLY_TYPES else "refinement"
+            if not isinstance(reply.get("label"), str) or not reply["label"].strip():
+                continue
             normalized_quick_replies.append(reply)
         normalized["sugerir_quick_replies"] = normalized_quick_replies
 

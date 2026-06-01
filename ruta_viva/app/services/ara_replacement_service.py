@@ -68,3 +68,35 @@ async def search_step_replacement_alternatives(
     alternatives = filter_blacklisted_context_pois(message, alternatives)
     result = [poi for poi in alternatives if poi.id != current_poi.id][:5]
     return result
+
+
+async def execute_step_replacement(
+    db: AsyncSession,
+    itinerary_id: UUID,
+    step_id: UUID,
+    new_poi_id: UUID,
+    tourist_id: UUID,
+) -> tuple[str, object] | None:
+    itinerary_model = await itinerary_repository._get_itinerary_model(db, itinerary_id, tourist_id)
+    if itinerary_model is None:
+        return None
+
+    step = next((s for s in itinerary_model.steps if s.id == step_id), None)
+    if step is None:
+        return None
+
+    new_poi = await poi_repository.get_poi_by_id(db, new_poi_id)
+    if new_poi is None:
+        return None
+
+    old_poi_name = step.poi.name if step.poi else "desconocido"
+
+    step.poi_id = new_poi_id
+    step.ai_context = None
+
+    await db.flush()
+    await db.refresh(step)
+
+    updated_itinerary = await itinerary_repository.get_itinerary_by_id(db, itinerary_id, tourist_id)
+
+    return old_poi_name, updated_itinerary

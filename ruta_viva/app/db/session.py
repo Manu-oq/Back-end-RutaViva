@@ -10,21 +10,21 @@ from app.models.category import Category
 
 
 BASE_CATEGORIES = [
-    {"id": 1, "name": "Naturaleza", "icon_url": None},
-    {"id": 2, "name": "Gastronomía", "icon_url": None},
-    {"id": 3, "name": "Turismo", "icon_url": None},
-    {"id": 4, "name": "Alojamiento", "icon_url": None},
-    {"id": 5, "name": "Cultura", "icon_url": None},
-    {"id": 6, "name": "Trekking/Senderismo", "icon_url": None},
-    {"id": 7, "name": "Lagos/Ríos/Playas", "icon_url": None},
-    {"id": 8, "name": "Montañas/Volcanes/Miradores", "icon_url": None},
-    {"id": 9, "name": "Termas/Bienestar", "icon_url": None},
-    {"id": 10, "name": "Parques/Reservas", "icon_url": None},
-    {"id": 11, "name": "Museos/Patrimonio", "icon_url": None},
-    {"id": 12, "name": "Aventura/Deportes", "icon_url": None},
-    {"id": 13, "name": "Servicios turísticos/Información", "icon_url": None},
-    {"id": 14, "name": "Transporte/Accesos", "icon_url": None},
-    {"id": 15, "name": "Artesanía/Compras locales", "icon_url": None},
+    {"id": 1, "name": "Naturaleza", "parent_id": None},
+    {"id": 2, "name": "Gastronomía", "parent_id": None},
+    {"id": 3, "name": "Turismo", "parent_id": None},
+    {"id": 4, "name": "Alojamiento", "parent_id": None},
+    {"id": 5, "name": "Cultura", "parent_id": None},
+    {"id": 6, "name": "Trekking/Senderismo", "parent_id": 1},
+    {"id": 7, "name": "Lagos/Ríos/Playas", "parent_id": 1},
+    {"id": 8, "name": "Montañas/Volcanes/Miradores", "parent_id": 1},
+    {"id": 9, "name": "Termas/Bienestar", "parent_id": None},
+    {"id": 10, "name": "Parques/Reservas", "parent_id": 1},
+    {"id": 11, "name": "Museos/Patrimonio", "parent_id": 5},
+    {"id": 12, "name": "Aventura/Deportes", "parent_id": None},
+    {"id": 13, "name": "Servicios turísticos/Información", "parent_id": None},
+    {"id": 14, "name": "Transporte/Accesos", "parent_id": None},
+    {"id": 15, "name": "Artesanía/Compras locales", "parent_id": None},
 ]
 
 
@@ -69,6 +69,7 @@ async def init_db() -> None:
                 set_={
                     "name": category_insert.excluded.name,
                     "icon_url": category_insert.excluded.icon_url,
+                    "parent_id": category_insert.excluded.parent_id,
                 },
             )
         )

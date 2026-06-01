@@ -73,6 +73,9 @@ class ToolOrchestrator:
 
         selected_poi = await self._resolve_poi_reference(db, session, current_user_message, comprehension)
         if selected_poi is not None and self._looks_like_poi_selection(current_user_message):
+            replacement_context = (session.preferences_data or {}).get("replacement_context")
+            if replacement_context and replacement_context.get("itinerary_id") and replacement_context.get("step_id"):
+                return await self._handle_step_replacement(db, user, session, selected_poi, replacement_context)
             self._remember_selected_poi(session, selected_poi)
             result.response_text = (
                 f"Perfecto, deje seleccionado {selected_poi.name} para considerarlo en tu viaje. "
@@ -82,6 +85,15 @@ class ToolOrchestrator:
             result.candidate_pois = []
             # Use comprehension quick replies if available, otherwise let response generator decide
             result.quick_replies = comprehension.sugerir_quick_replies or []
+            return result
+
+        replacement_context = (session.preferences_data or {}).get("replacement_context")
+        if replacement_context and replacement_context.get("itinerary_id") and replacement_context.get("step_id"):
+            replacement = await self._suggest_replacement(
+                db, user, comprehension, session, user_message=current_user_message or "",
+            )
+            result.candidate_pois = replacement.get("alternatives", [])
+            result.status = "replace"
             return result
 
         # 1. Herramientas independientes en paralelo
@@ -124,7 +136,7 @@ class ToolOrchestrator:
 
         if "suggest_replacement" in tools:
             try:
-                replacement = await self._suggest_replacement(db, user, comprehension, session)
+                replacement = await self._suggest_replacement(db, user, comprehension, session, user_message=current_user_message)
                 result.candidate_pois = replacement.get("alternatives", [])
                 result.status = "replace"
             except Exception as exc:
@@ -562,6 +574,8 @@ class ToolOrchestrator:
         user: User,
         comprehension: ComprehensionResult,
         session: AraSession,
+        *,
+        user_message: str = "",
     ) -> dict[str, Any]:
         from app.services.ara_replacement_service import (
             build_step_replacement_context,
@@ -582,11 +596,43 @@ class ToolOrchestrator:
         _, step, current_poi = context
         alternatives = await search_step_replacement_alternatives(
             db, user, get_embedding_service(),
-            message="", current_poi=current_poi,
-            lat=session.lat, lon=session.lon, radius=8000,
+            message=user_message, current_poi=current_poi,
+            lat=None, lon=None, radius=8000,
         )
 
         return {"alternatives": alternatives[:3], "current_poi_name": current_poi.name}
+
+    async def _handle_step_replacement(
+        self,
+        db: AsyncSession,
+        user: User,
+        session: AraSession,
+        new_poi,
+        replacement_context: dict,
+    ) -> ToolExecutionResult:
+        from app.services.ara_replacement_service import execute_step_replacement
+
+        itinerary_id = UUID(replacement_context["itinerary_id"])
+        step_id = UUID(replacement_context["step_id"])
+
+        result = await execute_step_replacement(db, itinerary_id, step_id, new_poi.id, user.id)
+        if result is None:
+            return ToolExecutionResult(status="error", error="No se pudo ejecutar el reemplazo")
+
+        old_poi_name, updated_itinerary = result
+
+        preferences = dict(session.preferences_data or {})
+        preferences.pop("replacement_context", None)
+        preferences["conversation_mode"] = "post_generation"
+        session.preferences_data = preferences
+        session.status = "step_replaced"
+
+        tool_result = ToolExecutionResult(
+            status="step_replaced",
+            response_text=f"¡Listo! He reemplazado \"{old_poi_name}\" por \"{new_poi.name}\" en tu itinerario.",
+        )
+        tool_result.itinerary = updated_itinerary
+        return tool_result
 
     @staticmethod
     def _build_clarification_text(comprehension: ComprehensionResult) -> str:

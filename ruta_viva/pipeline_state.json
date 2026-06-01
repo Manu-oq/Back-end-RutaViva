@@ -1,0 +1,15 @@
+{
+  "completed": [
+    "seed",
+    "osm",
+    "conaf",
+    "recategorize",
+    "enrich",
+    "rewrite",
+    "audit",
+    "apply"
+  ],
+  "started_at": "2026-05-30T23:03:37.941026+00:00",
+  "last_error": null,
+  "last_update": "2026-05-31T01:15:42.696036+00:00"
+}

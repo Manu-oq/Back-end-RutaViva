@@ -54,6 +54,24 @@ async def create_session_v2(
 ) -> AraSessionResponse:
     """Crear nueva sesion de Ara v2 y procesar el primer mensaje del usuario."""
     try:
+        preferences_data: dict = {
+            "trip_draft": {
+                "initial_query": payload.initial_message,
+                "start_date": payload.start_date.isoformat() if payload.start_date else None,
+                "end_date": payload.end_date.isoformat() if payload.end_date else None,
+            }
+        }
+
+        if payload.metadata and payload.metadata.get("intent") == "change_itinerary_step":
+            itinerary_id = payload.metadata.get("itinerary_id")
+            step_id = payload.metadata.get("step_id")
+            if itinerary_id and step_id:
+                preferences_data["replacement_context"] = {
+                    "itinerary_id": str(itinerary_id),
+                    "step_id": str(step_id),
+                }
+                preferences_data["conversation_mode"] = "replacement"
+
         session = await ara_repository.create_session(
             db,
             tourist_id=current_user.id,
@@ -64,13 +82,7 @@ async def create_session_v2(
             start_date=payload.start_date,
             end_date=payload.end_date,
             intent_data={"initial_query": payload.initial_message},
-            preferences_data={
-                "trip_draft": {
-                    "initial_query": payload.initial_message,
-                    "start_date": payload.start_date.isoformat() if payload.start_date else None,
-                    "end_date": payload.end_date.isoformat() if payload.end_date else None,
-                }
-            },
+            preferences_data=preferences_data,
             candidate_poi_ids=None,
         )
 

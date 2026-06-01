@@ -19,8 +19,8 @@ class MemoryFact(BaseModel):
 
 
 class QuickReplySuggestion(BaseModel):
-    label: str = Field(..., description="Texto visible para el usuario")
-    value: str = Field(..., description="Valor interno cuando el usuario toca")
+    label: str = Field(min_length=1, description="Texto visible para el usuario")
+    value: str = Field(min_length=1, description="Valor interno cuando el usuario toca")
     type: str = Field(default="refinement", pattern="^(refinement|selection|action|navigation|generate)$")
 
     @field_validator("type", mode="before")
@@ -73,7 +73,7 @@ class ComprehensionResult(BaseModel):
 
 
 class ToolExecutionResult(BaseModel):
-    status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error)$")
+    status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error|step_replaced)$")
     response_text: str | None = None
     quick_replies: list[QuickReplySuggestion] | None = None
     candidate_pois: list[dict] | None = None

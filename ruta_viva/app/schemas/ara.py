@@ -10,9 +10,9 @@ from app.schemas.itinerary import ItineraryResponse
 
 
 class AraQuickReply(BaseModel):
-    id: str
-    label: str
-    value: str
+    id: str = ""
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
     type: str = "refinement"
 
 

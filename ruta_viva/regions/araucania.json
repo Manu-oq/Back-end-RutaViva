@@ -1,0 +1,14 @@
+{
+  "name": "La Araucanía",
+  "iso3166_2": "CL-AR",
+  "wikidata_id": "Q2170",
+  "admin_level_name": "Araucanía|Araucania",
+  "bbox": {
+    "south": -39.90,
+    "west": -73.80,
+    "north": -37.35,
+    "east": -70.75
+  },
+  "description_suffix": "en la Región de La Araucanía, Chile",
+  "category_default": "Turismo"
+}

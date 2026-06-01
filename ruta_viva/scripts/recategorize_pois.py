@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -24,14 +24,15 @@ logger = logging.getLogger("recategorize_pois")
 
 THERMAL_KEYWORDS = ("terma", "termas", "thermal", "spa")
 INFO_KEYWORDS = ("conaf", "información", "informacion", "oficina", "centro de visitantes")
-VOLCANO_KEYWORDS = ("volcán", "volcan", "mirador", "cerro", "montaña")
-WATER_KEYWORDS = ("lago", "laguna", "río", "rio", "playa", "salto", "cascada")
-TREKKING_KEYWORDS = ("sendero", "trekking", "trail", "hiking", "camino")
+VOLCANO_KEYWORDS = ("volcán", "volcan", "mirador", "cerro", "montaña", "nevado", "ladera")
+WATER_KEYWORDS = ("lago", "laguna", "río", "rio", "playa", "salto", "cascada", "humedal", "estero")
+TREKKING_KEYWORDS = ("sendero", "trekking", "trail", "hiking", "camino", "excursión", "excursion", "senderismo", "caminata")
 PARK_KEYWORDS = ("parque", "reserva", "monumento natural")
-CULTURE_KEYWORDS = ("museo", "patrimonio", "histórico", "historico", "galería", "galeria")
-CRAFT_KEYWORDS = ("artesanía", "artesania", "mercado", "feria")
-FOOD_KEYWORDS = ("restaurant", "restaurante", "café", "cafe", "bar", "pub", "comida")
-LODGING_KEYWORDS = ("hotel", "hostal", "hostel", "cabaña", "cabana", "camping")
+CULTURE_KEYWORDS = ("museo", "patrimonio", "histórico", "historico", "galería", "galeria", "iglesia", "catedral", "capilla", "ruca", "cultural")
+CRAFT_KEYWORDS = ("artesanía", "artesania", "mercado", "feria", "artesanal", "artesano")
+FOOD_KEYWORDS = ("restaurant", "restaurante", "café", "cafe", "bar", "pub", "comida", "pizzería", "pizzeria", "heladería", "heladeria", "sandwich", "hamburguesa", "empanad")
+LODGING_KEYWORDS = ("hotel", "hostal", "hostel", "cabaña", "cabana", "camping", "alojamiento", "hospedaje", "albergue", "refugio")
+DEPORTE_KEYWORDS = ("deporte", "aventura", "kayak", "rafting", "esquí", "esqui", "bicicleta", "surf", "parapente", "skate", "tirolesa")
 
 
 def configure_logging() -> None:
@@ -86,6 +87,12 @@ def infer_categories(name: str, description: str) -> list[str]:
         categories.append("Cultura")
     if contains_any(text, CRAFT_KEYWORDS):
         categories.append("Artesanía/Compras locales")
+    if contains_any(text, DEPORTE_KEYWORDS):
+        categories.append("Aventura/Deportes")
+    if any(kw in text for kw in ("mirador", "cerro", "montaña", "volcán", "volcan")):
+        categories.append("Montañas/Volcanes/Miradores")
+        if not is_leisure_or_service:
+            categories.append("Naturaleza")
 
     if not categories:
         categories.append("Turismo")
@@ -183,9 +190,13 @@ async def recategorize() -> None:
                 infer_visit_rules(poi.name, poi.description, categories),
             )
 
-            await db.execute(delete(POICategory).where(POICategory.poi_id == poi.id))
+            existing_result = await db.execute(
+                select(POICategory.category_id).where(POICategory.poi_id == poi.id)
+            )
+            existing_ids = {row[0] for row in existing_result.all()}
             for category_id in category_ids:
-                db.add(POICategory(poi_id=poi.id, category_id=category_id))
+                if category_id not in existing_ids:
+                    db.add(POICategory(poi_id=poi.id, category_id=category_id))
 
             updated += 1
             if updated % 100 == 0:

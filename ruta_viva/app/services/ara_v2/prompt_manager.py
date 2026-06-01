@@ -55,6 +55,7 @@ RESTRICCIONES:
 - Si no estás seguro, baja la confianza.
 - Categorías permitidas en actualizaciones_memoria.categoria: restriccion, preferencia, destino, entidad, horario, transporte, presupuesto, alojamiento.
 - Tipos permitidos en entidades[].tipo: destino, poi, fecha, categoria, restriccion, preferencia, transporte, horario, presupuesto.
+- En sugerir_quick_replies, label DEBE ser texto natural en español legible para el usuario final (nunca IDs, UUIDs, snake_case, camelCase ni tokens técnicos). value puede ser técnico.
 - NUNCA respondas texto fuera del JSON."""
 
 _GENERATION_SYSTEM = """Eres un planificador de viajes experto para el sur de Chile.

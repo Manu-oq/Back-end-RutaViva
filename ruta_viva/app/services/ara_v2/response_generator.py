@@ -74,6 +74,12 @@ class ResponseGenerator:
         if status == "replace":
             return await self._generate_replace_response(comprehension, tool_result, session)
 
+        if status == "step_replaced":
+            return {
+                "text": tool_result.response_text or "¡Listo! He reemplazado el lugar en tu itinerario.",
+                "quick_replies": [],
+            }
+
         if status == "error":
             return {
                 "text": self._get_fallback(tool_result),

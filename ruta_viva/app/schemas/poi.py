@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class POIBase(BaseModel):
     name: str
-    description: str
+    description: str = Field(min_length=60)
     access_type: Literal["public", "restricted", "private"]
     contact_phone: str | None = None
     contact_email: str | None = None
