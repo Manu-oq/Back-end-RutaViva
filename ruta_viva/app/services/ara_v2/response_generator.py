@@ -76,9 +76,16 @@ class ResponseGenerator:
             return await self._generate_replace_response(comprehension, tool_result, session)
 
         if status == "step_replaced":
+            metadata = None
+            if tool_result.itinerary:
+                metadata = {
+                    "updated_itinerary": tool_result.itinerary.model_dump(mode="json"),
+                    "itinerary_id": str(tool_result.itinerary.id),
+                }
             return {
                 "text": tool_result.response_text or "¡Listo! He reemplazado el lugar en tu itinerario.",
                 "quick_replies": [],
+                "metadata": metadata,
             }
 
         if status == "error":
