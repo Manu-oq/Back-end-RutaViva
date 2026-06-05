@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.weather import WeatherDailyForecast
+
 
 class GenerateItineraryRequest(BaseModel):
     query: str = Field(max_length=15000)
@@ -29,7 +31,11 @@ class GenerateItineraryRequest(BaseModel):
 
 class GeneratedItineraryStep(BaseModel):
     step_order: int = Field(gt=0)
-    poi_id: UUID
+    poi_id: UUID | None = None
+    name: str | None = None
+    is_generic: bool = False
+    lat: float | None = None
+    lon: float | None = None
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
     ai_context: dict[str, Any] | None = None
@@ -44,7 +50,11 @@ class GeneratedItinerary(BaseModel):
 class ItineraryStepResponse(BaseModel):
     id: UUID
     itinerary_id: UUID
-    poi_id: UUID
+    poi_id: UUID | None = None
+    name: str | None = None
+    is_generic: bool = False
+    lat: float | None = None
+    lon: float | None = None
     poi_name: str | None = None
     poi_description: str | None = None
     step_order: int
@@ -61,7 +71,9 @@ class ItineraryStepResponse(BaseModel):
 
 
 class ItineraryStepCreate(BaseModel):
-    poi_id: UUID
+    poi_id: UUID | None = None
+    name: str | None = None
+    is_generic: bool = False
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
     ai_context: dict[str, Any] | None = None
@@ -74,6 +86,8 @@ class ItineraryStatusUpdate(BaseModel):
 
 class ItineraryStepUpdate(BaseModel):
     poi_id: UUID | None = None
+    name: str | None = None
+    is_generic: bool | None = None
     arrival_time: datetime | None = None
     departure_time: datetime | None = None
     ai_context: dict[str, Any] | None = None
@@ -120,13 +134,18 @@ class ItineraryStepWeather(BaseModel):
 
 class ItineraryStepWeatherResponse(BaseModel):
     step_id: UUID
-    poi_id: UUID
+    poi_id: UUID | None = None
     poi_name: str | None = None
     day_date: date | None = None
     weather_available: bool = False
     weather_status: Literal["available", "out_of_range", "not_applicable", "unavailable"] = "unavailable"
     weather_message: str | None = None
     weather: ItineraryStepWeather | None = None
+
+
+class ItineraryDayWeatherResponse(BaseModel):
+    itinerary_id: UUID
+    daily: list[WeatherDailyForecast] = Field(default_factory=list)
 
 
 class ItineraryExportStep(BaseModel):

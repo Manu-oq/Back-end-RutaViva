@@ -28,7 +28,7 @@ async def search_places(
         params["viewbox"] = f"{lon - delta},{lat + delta},{lon + delta},{lat - delta}"
         params["bounded"] = 0
 
-    headers = {"User-Agent": "RutaVivaBackend/0.1 (geocoding)"}
+    headers = {"User-Agent": "RutaVivaBackend/0.1 (contact: xalex0905@gmail.com)"}
 
     client = get_client("nominatim", base_url=NOMINATIM_SEARCH_URL, timeout=NOMINATIM_TIMEOUT_SECONDS)
     response = await client.get("", params=params, headers=headers)

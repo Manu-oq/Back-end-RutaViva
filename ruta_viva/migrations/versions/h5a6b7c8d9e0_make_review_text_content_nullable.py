@@ -1,7 +1,7 @@
 """make review text_content nullable
 
-Revision ID: g4a5b6c7d8e9
-Revises: f3a4b5c6d7e8
+Revision ID: h5a6b7c8d9e0
+Revises: g4a5b6c7d8e9
 Create Date: 2026-05-22 05:30:00.000000
 
 """

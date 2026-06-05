@@ -282,8 +282,9 @@ class AraMessages:
             # Misc (from skeleton / future use)
             # ============================================================
             "greeting": (
-                "¡Hola! Soy Ara, tu guía turística de La Araucanía. "
-                "¿En qué puedo ayudarte?"
+                "Soy Ara, tu asistente de viajes para La Araucanía. "
+                "Contame: ¿a dónde querés ir?, ¿cuántos días?, y ¿qué ritmo te gusta? "
+                "También podés decirme \"hacelo todo vos\" o ir eligiendo cada paso vos mismo."
             ),
             "greeting_with_dates": (
                 "¡Hola! Soy Ara. Veo que tienes fechas para tu viaje: "

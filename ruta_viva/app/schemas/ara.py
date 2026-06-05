@@ -73,6 +73,24 @@ class AraGenerateItineraryRequest(BaseModel):
     final_instruction: str | None = Field(default=None, max_length=1000)
 
 
+class AraIntentUpdate(BaseModel):
+    destination: str | None = Field(default=None, max_length=200)
+    start_date: date | None = None
+    end_date: date | None = None
+    pace: str | None = Field(default=None, pattern="^(relaxed|moderate|intense)$")
+    interests: list[str] | None = Field(default=None, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> "AraIntentUpdate":
+        if self.start_date is not None and self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date.")
+        if self.start_date is not None and self.end_date is not None:
+            trip_days = (self.end_date - self.start_date).days + 1
+            if trip_days > 7:
+                raise ValueError("Itinerary generation supports a maximum range of 7 days.")
+        return self
+
+
 class AraIntentInfo(BaseModel):
     intents: list[str] = Field(default_factory=list)
     primary_intent: str | None = None
@@ -123,6 +141,7 @@ class AraSessionResponse(BaseModel):
     destination_context: dict[str, Any] | None = None
     weather: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
+    all_slots_filled: bool = False
 
 
 class AraMessagesResponse(BaseModel):

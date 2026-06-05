@@ -33,15 +33,22 @@ class ItineraryGenerator:
         weather_forecast: str,
         schedule_guidance: str,
         stream_callback: Callable[[str], Awaitable[None]] | None = None,
+        has_own_transport: bool = False,
+        meal_slots: list[dict] | None = None,
     ) -> dict:
         context_payload = [poi.model_dump(mode="json") for poi in context_pois]
 
-        system_prompt = build_generation_prompt({
+        gen_ctx: dict[str, Any] = {
             "user_query": user_query,
             "context_pois": context_payload,
             "weather_forecast": weather_forecast,
             "schedule_guidance": schedule_guidance,
-        })
+            "has_own_transport": has_own_transport,
+        }
+        if meal_slots:
+            gen_ctx["meal_slots"] = meal_slots
+
+        system_prompt = build_generation_prompt(gen_ctx)
 
         user_prompt = "Generá el itinerario en formato JSON."
 
@@ -118,7 +125,7 @@ def _normalize_itinerary_payload(payload: dict, context_pois: list[POIResponse] 
         if not isinstance(day_steps, list):
             continue
         for step in day_steps:
-            if not isinstance(step, dict) or not step.get("poi_id"):
+            if not isinstance(step, dict):
                 continue
             ai_context = dict(step.get("ai_context") or {})
             for source_key, target_key in (
@@ -135,7 +142,11 @@ def _normalize_itinerary_payload(payload: dict, context_pois: list[POIResponse] 
             flattened.append(
                 {
                     "step_order": int(step.get("step_order") or step_order),
-                    "poi_id": step.get("poi_id") or step.get("poi_name") or step.get("name") or step.get("title"),
+                    "poi_id": step.get("poi_id"),
+                    "name": step.get("name"),
+                    "is_generic": bool(step.get("is_generic")) or bool(ai_context.get("is_generic_meal")),
+                    "lat": step.get("lat"),
+                    "lon": step.get("lon"),
                     "arrival_time": step.get("arrival_time"),
                     "departure_time": step.get("departure_time"),
                     "ai_context": ai_context,
@@ -167,6 +178,17 @@ def _is_uuid(value: Any) -> bool:
         return False
 
 
+
+def _is_generic_step_payload(step: dict) -> bool:
+    ai_context = step.get("ai_context") or {}
+    meal_names = {"desayuno", "almuerzo", "cena", "once"}
+    candidate_name = _normalize_text(str(step.get("name") or step.get("title") or ""))
+    return (
+        bool(step.get("is_generic"))
+        or bool(ai_context.get("is_generic_meal"))
+        or (step.get("poi_id") is None and candidate_name in meal_names and not step.get("poi_name"))
+    )
+
 def _normalize_step_poi_ids(steps: list[dict], context_pois: list[POIResponse] | None) -> list[dict]:
     if not context_pois:
         return steps
@@ -178,6 +200,19 @@ def _normalize_step_poi_ids(steps: list[dict], context_pois: list[POIResponse] |
         if not isinstance(raw_step, dict):
             continue
         step = dict(raw_step)
+        if _is_generic_step_payload(step):
+            step["poi_id"] = None
+            step["is_generic"] = True
+            step.setdefault("lat", None)
+            step.setdefault("lon", None)
+            ai_context = dict(step.get("ai_context") or {})
+            ai_context.setdefault("is_generic_meal", True)
+            if step.get("name"):
+                ai_context.setdefault("meal_type", _normalize_text(str(step["name"])))
+            step["ai_context"] = ai_context
+            normalized_steps.append(step)
+            continue
+
         raw_poi_id = step.get("poi_id")
         if _is_uuid(raw_poi_id):
             poi_id_str = str(raw_poi_id)

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import date as date_type
+from datetime import date as date_type, datetime, time, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.itinerary_constants import CHILE_TZ
 from app.models.user import User
 from app.repositories.ara_repository import AraRepository
 from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.ara import AraGenerateItineraryRequest, AraGenerateItineraryResponse
-from app.schemas.itinerary import GenerateItineraryRequest, GeneratedItinerary
+from app.schemas.itinerary import GenerateItineraryRequest, GeneratedItinerary, GeneratedItineraryStep
 from app.schemas.poi import POIResponse
 from app.services.ara_response_builder import build_refined_query
 from app.services.embedding_service import EmbeddingCache, OpenAIEmbeddingService
@@ -41,10 +42,101 @@ from app.services.weather_service import get_forecast
 
 logger = logging.getLogger(__name__)
 
-ara_repository = AraRepository()
-poi_repository = POIRepository()
-itinerary_repository = ItineraryRepository()
 
+MEAL_SLOT_LABELS = {
+    "breakfast": "Desayuno",
+    "desayuno": "Desayuno",
+    "lunch": "Almuerzo",
+    "almuerzo": "Almuerzo",
+    "once": "Once",
+    "dinner": "Cena",
+    "cena": "Cena",
+}
+
+MEAL_SLOT_DEFAULT_TIMES = {
+    "Desayuno": time(hour=9),
+    "Almuerzo": time(hour=13),
+    "Once": time(hour=17),
+    "Cena": time(hour=20),
+}
+
+
+def _meal_slot_label(meal_type: Any) -> str:
+    return MEAL_SLOT_LABELS.get(str(meal_type or "").lower(), str(meal_type or "Comida").title())
+
+
+def _parse_meal_slot_time(value: Any, fallback_label: str) -> time:
+    if isinstance(value, str):
+        try:
+            hour, minute = value.split(":", 1)
+            return time(hour=int(hour), minute=int(minute[:2]))
+        except (ValueError, TypeError):
+            pass
+    return MEAL_SLOT_DEFAULT_TIMES.get(fallback_label, time(hour=13))
+
+
+def _generic_meal_step(step_order: int, meal_slot: dict[str, Any], start_date: date_type) -> GeneratedItineraryStep:
+    label = _meal_slot_label(meal_slot.get("meal_type"))
+    meal_time = _parse_meal_slot_time(meal_slot.get("time"), label)
+    arrival_time = datetime.combine(start_date, meal_time, tzinfo=CHILE_TZ)
+    ai_context = {
+        "is_generic_meal": True,
+        "meal_type": str(meal_slot.get("meal_type") or label).lower(),
+        "poi_role": "food",
+    }
+    return GeneratedItineraryStep(
+        step_order=step_order,
+        poi_id=None,
+        name=label,
+        is_generic=True,
+        lat=None,
+        lon=None,
+        arrival_time=arrival_time,
+        departure_time=arrival_time + timedelta(minutes=60),
+        ai_context=ai_context,
+    )
+
+
+def normalize_generic_meal_steps(
+    generated_itinerary: GeneratedItinerary,
+    meal_slots: list[dict[str, Any]] | None,
+    start_date: date_type,
+) -> GeneratedItinerary:
+    """Normaliza comidas genéricas para que no dependan de POIs reales."""
+    existing_labels: set[str] = set()
+    for step in generated_itinerary.steps:
+        ai_context = dict(step.ai_context or {})
+        is_generic_meal = bool(step.is_generic) or bool(ai_context.get("is_generic_meal")) or (
+            step.poi_id is None and (step.name or "").lower() in {"desayuno", "almuerzo", "cena", "once"}
+        )
+        if not is_generic_meal:
+            continue
+
+        label = _meal_slot_label(ai_context.get("meal_type") or step.name)
+        step.poi_id = None
+        step.name = label
+        step.is_generic = True
+        step.lat = None
+        step.lon = None
+        ai_context["is_generic_meal"] = True
+        ai_context.setdefault("meal_type", label.lower())
+        ai_context.setdefault("poi_role", "food")
+        step.ai_context = ai_context
+        existing_labels.add(label)
+
+    next_order = max((step.step_order for step in generated_itinerary.steps), default=0) + 1
+    for meal_slot in meal_slots or []:
+        label = _meal_slot_label(meal_slot.get("meal_type"))
+        if label in existing_labels:
+            continue
+        generated_itinerary.steps.append(_generic_meal_step(next_order, meal_slot, start_date))
+        existing_labels.add(label)
+        next_order += 1
+
+    generated_itinerary.steps.sort(key=lambda step: (step.arrival_time or datetime.max.replace(tzinfo=CHILE_TZ), step.step_order))
+    for index, step in enumerate(generated_itinerary.steps, start=1):
+        step.step_order = index
+    return generated_itinerary
 
 def _candidate_uuid_list(ids: Any) -> list[UUID]:
     if not ids:
@@ -70,6 +162,9 @@ async def generate_itinerary_core(
     weather_forecast: str | None = None,
     *,
     on_phase: Callable[[str, dict[str, Any] | None], Awaitable[None]] | None = None,
+    ara_repository: AraRepository,
+    itinerary_repository: ItineraryRepository,
+    poi_repository: POIRepository,
 ) -> tuple[Any, list[POIResponse], GenerateItineraryRequest]:
     """
     Core compartido de generacion de itinerarios.
@@ -237,6 +332,8 @@ async def generate_itinerary_core(
 
     # 5. Generate
     await _phase("generating")
+    has_transport = current_user.tourist_profile.has_own_transport if current_user.tourist_profile else False
+    profile = "driving" if has_transport else "foot"
     enriched_query = (
         f"Solicitud refinada por conversacion con Ara: {refined_query}\n"
         f"Fechas del viaje: desde {start_date.isoformat()} hasta {end_date.isoformat()}\n"
@@ -244,18 +341,28 @@ async def generate_itinerary_core(
         f"Radio maximo: {generation_payload.radius} metros\n"
         f"Duracion: {num_days} dia(s)"
     )
+    travel_matrix = await _build_travel_matrix(context_pois, profile, max_pois=15)
+    if travel_matrix:
+        enriched_query += f"\n\n{travel_matrix}"
     schedule_guidance = build_schedule_guidance(generation_payload)
 
     await ara_repository.update_session_context(db, session, status="generating")
-    await ara_repository.commit_or_rollback(db)
+
+    meal_slots = [
+        s for s in trip_draft.get("slots", [])
+        if s.get("type") == "meal"
+    ] if isinstance(trip_draft, dict) else []
 
     generated_raw = await llm_service.generate_itinerary(
         enriched_query,
         context_pois,
         weather_forecast,
         schedule_guidance,
+        has_own_transport=has_transport,
+        meal_slots=meal_slots if meal_slots else None,
     )
     generated_itinerary = GeneratedItinerary.model_validate(generated_raw)
+    generated_itinerary = normalize_generic_meal_steps(generated_itinerary, meal_slots, start_date)
 
     # 6. Repair
     await _phase("repairing")
@@ -281,3 +388,84 @@ async def generate_itinerary_core(
     session.generated_itinerary_id = itinerary.id
 
     return itinerary, context_pois, generation_payload
+
+
+async def _build_travel_matrix(
+    pois: list[POIResponse],
+    profile: str = "driving",
+    max_pois: int = 15,
+) -> str | None:
+    """Calcula y formatea una matriz de tiempos de traslado entre POIs candidatos."""
+    if len(pois) < 2:
+        return None
+
+    limited = pois[:max_pois]
+    coords: list[tuple[float, float]] = []
+    names: list[str] = []
+    for poi in limited:
+        lat = getattr(poi, "latitude", None)
+        lon = getattr(poi, "longitude", None)
+        if lat is None or lon is None:
+            continue
+        coords.append((lat, lon))
+        names.append(getattr(poi, "name", "Lugar"))
+
+    if len(coords) < 2:
+        return None
+
+    try:
+        from app.services.osrm_client import get_osrm_client
+        client = get_osrm_client()
+    except Exception:
+        return _haversine_travel_matrix(coords, names, profile)
+
+    matrix = await client.get_table(coords, coords, profile=profile)
+    if matrix is None:
+        return _haversine_travel_matrix(coords, names, profile)
+
+    lines: list[str] = []
+    trip_label = "auto" if profile == "driving" else "pie"
+    for i in range(len(names)):
+        for j in range(len(names)):
+            if i >= j:
+                continue
+            entry = matrix[i][j]
+            km = entry["distance_meters"] / 1000.0
+            mins = entry["duration_seconds"] / 60.0
+            lines.append(f"  - {names[i]} → {names[j]}: {km:.1f}km, {mins:.0f}min ({trip_label})")
+
+    if not lines:
+        return None
+
+    lines.insert(0, "Tiempos de traslado entre POIs sugeridos:")
+    return "\n".join(lines)
+
+
+def _haversine_travel_matrix(
+    coords: list[tuple[float, float]],
+    names: list[str],
+    profile: str = "foot",
+) -> str:
+    from app.services.geo_service import distance_meters
+
+    speeds = {"driving": 40.0, "foot": 5.0}
+    speed_kmh = speeds.get(profile, 5.0)
+    trip_label = "auto (estimado)" if profile == "driving" else "pie (estimado)"
+
+    lines: list[str] = []
+    for i in range(len(names)):
+        for j in range(len(names)):
+            if i >= j:
+                continue
+            lat_a, lon_a = coords[i]
+            lat_b, lon_b = coords[j]
+            mt = distance_meters(lat_a, lon_a, lat_b, lon_b)
+            km = mt / 1000.0
+            mins = (km / speed_kmh) * 60.0
+            lines.append(f"  - {names[i]} → {names[j]}: {km:.1f}km, {mins:.0f}min ({trip_label})")
+
+    if not lines:
+        return ""
+
+    lines.insert(0, "Tiempos de traslado estimados entre POIs sugeridos (Haversine):")
+    return "\n".join(lines)

@@ -21,6 +21,9 @@ wheels/
 *.manifest
 *.spec
 
+# OSRM data 
+ruta_viva/osrm_data/
+
 # Virtual environments
 .venv/
 venv/

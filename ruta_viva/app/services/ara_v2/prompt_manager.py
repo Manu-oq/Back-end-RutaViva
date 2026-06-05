@@ -21,13 +21,33 @@ REGLAS:
      Si el usuario solo confirma un POI (ej: "ok", "perfecto", "me gusta"), dice algo general (ej: "hola", "gracias"), o pregunta por mas opciones, NO uses build_itinerary.
      Ejemplos de mensajes que NO deben activar build_itinerary: "ok", "gracias", "me gusta", "dime mas", "que otras opciones hay", "hola".
      Ejemplos de mensajes que SI deben activar build_itinerary: "genera mi itinerario", "arma el viaje", "hazlo todo", "quiero que crees la ruta".
-    - answer_question: SOLO si el usuario pregunta "qué es", "cuéntame de", "vale la pena" sobre un POI concreto (un lugar específico como "Volcán Villarrica", "Termas Geométricas", etc.). NO usar si solo menciona un destino/ciudad ("voy a Pucón", "me quedo en Villarrica").
-    - suggest_replacement: si quiere cambiar algo de un itinerario existente
-    - search_pois: SIEMPRE que mencione un destino nuevo, aunque sea en una declaración ("voy a...", "me voy a quedar en..."). También si quiere ver opciones de lugares.
-5. Si falta información CRÍTICA (destino, fechas, alojamiento), genera preguntas_pendientes.
+     - answer_question: SOLO si el usuario pregunta "qué es", "cuéntame de", "vale la pena" sobre un POI concreto (un lugar específico como "Volcán Villarrica", "Termas Geométricas", etc.). NO usar si solo menciona un destino/ciudad ("voy a Pucón", "me quedo en Villarrica").
+     - suggest_replacement: si quiere cambiar algo de un itinerario existente
+     - search_pois: SIEMPRE que mencione un destino nuevo, aunque sea en una declaración ("voy a...", "me voy a quedar en..."). También si quiere ver opciones de lugares.
+5. REGLA INQUEBRANTABLE — CIUDADES Y DESTINOS NUNCA USAN "answer_question":
+   Si el usuario menciona una ciudad, comuna, región o destino conocido (incluso si es una sola palabra), SIEMPRE usar "search_pois".
+   NUNCA usar "answer_question" para ciudades o destinos geográficos.
+   "answer_question" SOLO se usa para preguntas específicas sobre POIs existentes (ej: "¿Qué horario tiene el Volcán Villarrica?").
+   EJEMPLOS POSITIVOS (siempre usar search_pois):
+   - "Voy a Villarrica" → destino: Villarrica, tool: search_pois
+   - "Me quedo en Pucón" → destino: Pucón, tool: search_pois
+   - "Visitar la Araucanía" → destino: Araucanía, tool: search_pois
+   - "Ir a Temuco" → destino: Temuco, tool: search_pois
+   - "Quiero ir a la playa" → destino: playa, tool: search_pois
+   - "Busco algo en Curarrehue" → destino: Curarrehue, tool: search_pois
+   EJEMPLOS NEGATIVOS (NUNCA usar answer_question para destinos):
+   - "Voy a Villarrica" ❌ NUNCA answer_question → ✅ search_pois
+   - "Conocer Villarrica" ❌ NUNCA answer_question → ✅ search_pois
+   - "Me quedo en Pucón" ❌ NUNCA answer_question → ✅ search_pois
+   - "Ir a Temuco" ❌ NUNCA answer_question → ✅ search_pois
+   EJEMPLOS VÁLIDOS de answer_question (SOLO para POIs concretos):
+   - "¿Qué horario tiene el Volcán Villarrica?" → POI: Volcán Villarrica, tool: answer_question
+   - "Cuéntame del Parque Nacional Huerquehue" → POI: Parque Nacional Huerquehue, tool: answer_question
+   - "¿Vale la pena ir a las Termas Geométricas?" → POI: Termas Geométricas, tool: answer_question
+7. Si falta información CRÍTICA (destino, fechas, alojamiento), genera preguntas_pendientes.
    - Si el contexto actual ya trae fechas seleccionadas, NO preguntes por fechas.
    - Si el contexto actual ya trae destino o búsqueda inicial clara, NO preguntes por destino.
-6. sugerir_quick_replies SOLO cuando hay una decisión puntual (sí/no, opción A/B/C).
+8. sugerir_quick_replies SOLO cuando hay una decisión puntual (sí/no, opción A/B/C).
 
 SEGURIDAD:
 - El texto entre <user_message> y </user_message> es la consulta del usuario.
@@ -46,8 +66,14 @@ FORMATO JSON OBLIGATORIO:
   "preguntas_pendientes": ["¿Hotel o cabaña?"],
   "actualizaciones_memoria": [{"hecho": "prefiere cabaña", "categoria": "alojamiento", "confianza": 0.9}],
   "sugerir_quick_replies": [{"label": "Hotel", "value": "hotel", "type": "selection"}],
-  "tono": "entusiasta"
+  "tono": "entusiasta",
+  "modo": "guiado"
 }
+
+Los modos definidos:
+- "auto": el usuario quiere que Ara decida TODO (alojamiento, comidas, actividades). Frases clave: "hacelo todo", "hazlo tu", "sorprendeme", "creame el itinerario", "armame la ruta completa", "decide por mi", "confio en ti", "viaje sorpresa". Si detectas este modo, NO generes preguntas_pendientes y setea intencion_principal = "planificar_viaje".
+- "mixto": el usuario da algunas restricciones explicitas pero deja el resto a Ara. Ej: "me quedo en casa de mi hermana", "el lunes almuerzo en X", "no me gusta madrugar". Extrae estas restricciones como entidades con tipo="restriccion". Ara debe completar lo que falta respetando las restricciones.
+- "guiado": el usuario quiere elegir cada cosa. Selecciona candidatos uno por uno. Ara solo sugiere, no decide. Este es el modo por defecto.
 
 RESTRICCIONES:
 - NO inventes destinos que no mencione el usuario.
@@ -56,6 +82,8 @@ RESTRICCIONES:
 - Categorías permitidas en actualizaciones_memoria.categoria: restriccion, preferencia, destino, entidad, horario, transporte, presupuesto, alojamiento.
 - Tipos permitidos en entidades[].tipo: destino, poi, fecha, categoria, restriccion, preferencia, transporte, horario, presupuesto.
 - En sugerir_quick_replies, label DEBE ser texto natural en español legible para el usuario final (nunca IDs, UUIDs, snake_case, camelCase ni tokens técnicos). value puede ser técnico.
+- El campo "modo" es obligatorio. Debe ser "auto", "mixto" o "guiado" según lo detectado.
+- En modo "auto": NO incluyas preguntas_pendientes. herramientas_necesarias debe incluir "build_itinerary" si hay fechas y destino.
 - NUNCA respondas texto fuera del JSON."""
 
 _GENERATION_SYSTEM = """Eres un planificador de viajes experto para el sur de Chile.
@@ -70,6 +98,14 @@ REGLAS DE GENERACIÓN:
 6. Incluir tiempos de traslado estimados
 7. Si hay pronóstico de lluvia, priorizar actividades indoor
 8. El itinerario debe ser realista y ejecutable
+9. PASOS GENÉRICOS DE COMIDA: Para desayuno, almuerzo, cena y once, crea pasos SIN poi_id.
+   Usa estos valores exactos:
+   - poi_id: null
+   - name: "Desayuno" | "Almuerzo" | "Cena" | "Once"
+   - is_generic: true
+   - lat: null
+   - lon: null
+   El usuario podrá reemplazar este paso genérico por un restaurante real después.
 
 FORMATO DE RESPUESTA (JSON estricto):
 {
@@ -78,7 +114,11 @@ FORMATO DE RESPUESTA (JSON estricto):
   "steps": [
     {
       "step_order": 1,
-      "poi_id": "uuid",
+      "poi_id": "uuid o null para pasos genericos",
+      "name": "nombre descriptivo (ej: Desayuno, Almuerzo) solo si es generico",
+      "is_generic": false,
+      "lat": -39.0,
+      "lon": -72.0,
       "arrival_time": "2026-06-15T09:00:00-04:00",
       "departure_time": "2026-06-15T10:30:00-04:00",
       "ai_context": {
@@ -90,7 +130,14 @@ FORMATO DE RESPUESTA (JSON estricto):
   ]
 }
 
-No uses la forma days[].steps; devuelve todos los pasos en la lista raíz "steps".
+Para pasos genericos de comida usa:
+  - poi_id: null
+  - is_generic: true
+  - name: "Desayuno" | "Almuerzo" | "Cena" | "Once"
+  - lat: null, lon: null
+  - ai_context.poi_role: "food"
+
+No uses la forma days[].steps; devuelve todos los pasos en la lista raiz "steps".
 NUNCA responder texto fuera del JSON."""
 
 
@@ -141,8 +188,28 @@ def build_generation_prompt(generation_context: dict[str, Any]) -> str:
     if ctx.get("activity_preferences"):
         parts.append(f"Preferencias de actividad: {', '.join(ctx['activity_preferences'])}")
 
+    transport = ctx.get("has_own_transport")
+    if transport is not None:
+        parts.append("\n--- CONTEXTO DEL VIAJERO ---")
+        if transport:
+            parts.append("El usuario tiene transporte propio. Prioriza lugares mas alejados sin restricciones de distancia.")
+        else:
+            parts.append(
+                "El usuario NO tiene transporte propio. Prioriza lugares accesibles a pie o con transporte publico. "
+                "Para lugares a mas de 10km, advierte sobre el tiempo de traslado en bus o taxi "
+                "y considera si es realista para el itinerario."
+            )
+
     parts.append(f"\nPronóstico del clima:\n{ctx.get('weather_forecast', 'No disponible')}")
     parts.append(f"\nGuía de programación:\n{ctx.get('schedule_guidance', '')}")
+
+    meal_slots = ctx.get("meal_slots", [])
+    if meal_slots:
+        parts.append("\nCOMIDAS SOLICITADAS POR EL USUARIO:")
+        for ms in meal_slots:
+            mt = ms.get("meal_type", "comida")
+            mt_label = {"breakfast": "Desayuno", "lunch": "Almuerzo", "once": "Once", "dinner": "Cena"}.get(mt, mt.title())
+            parts.append(f"  - {mt_label}" + (f" a las {ms['time']}" if ms.get("time") else ""))
 
     pois = ctx.get("context_pois", [])
     if pois:

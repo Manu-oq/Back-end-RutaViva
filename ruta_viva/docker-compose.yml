@@ -1,4 +1,22 @@
 services:
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    container_name: rutaviva_osrm
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./osrm_data:/data
+    command: osrm-routed --algorithm mld /data/chile-latest.osrm
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:5000/nearest/v1/driving/-72.667,-38.900?number=1' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - routing
+
   api:
     build:
       context: .

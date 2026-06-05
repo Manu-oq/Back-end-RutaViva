@@ -65,6 +65,7 @@ class ComprehensionResult(BaseModel):
     actualizaciones_memoria: list[MemoryFact] = Field(default_factory=list)
     sugerir_quick_replies: list[QuickReplySuggestion] | None = None
     tono: str = Field(default="neutro", pattern="^(entusiasta|neutro|informativo|empatico)$")
+    modo: str = Field(default="guiado", pattern="^(auto|mixto|guiado)$")
 
     @field_validator("tono", mode="before")
     @classmethod
@@ -73,7 +74,7 @@ class ComprehensionResult(BaseModel):
 
 
 class ToolExecutionResult(BaseModel):
-    status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error|step_replaced)$")
+    status: str = Field(..., pattern="^(respond|generate|search|clarify|replace|error|step_replaced|itinerary_pending)$")
     response_text: str | None = None
     quick_replies: list[QuickReplySuggestion] | None = None
     candidate_pois: list[dict] | None = None

@@ -106,6 +106,8 @@ class ItineraryRepository(BaseRepository):
                         arrival_time=step.arrival_time,
                         departure_time=step.departure_time,
                         ai_context=step.ai_context,
+                        name=step.name,
+                        is_generic=step.is_generic,
                     )
                 )
 
@@ -116,6 +118,7 @@ class ItineraryRepository(BaseRepository):
                     source="itinerary",
                 )
                 for step in ordered_steps
+                if step.poi_id is not None and not step.is_generic
             ])
 
             await self._commit_or_rollback(db)
@@ -285,6 +288,13 @@ class ItineraryRepository(BaseRepository):
             if poi is None:
                 raise ValueError("POI not found.")
             step.poi_id = step_in.poi_id
+            step.is_generic = False
+        if step_in.name is not None:
+            step.name = step_in.name
+        if step_in.is_generic is not None:
+            step.is_generic = step_in.is_generic
+            if step.is_generic:
+                step.poi_id = None
         if step_in.arrival_time is not None:
             step.arrival_time = step_in.arrival_time
         if step_in.departure_time is not None:
@@ -308,9 +318,15 @@ class ItineraryRepository(BaseRepository):
             return None
         self._ensure_itinerary_editable(itinerary)
 
-        poi = await db.get(POI, step_data.poi_id)
-        if poi is None:
-            raise ValueError("POI not found.")
+        if step_data.is_generic:
+            if not step_data.name:
+                raise ValueError("name is required for generic itinerary steps.")
+        else:
+            if step_data.poi_id is None:
+                raise ValueError("poi_id is required for non-generic itinerary steps.")
+            poi = await db.get(POI, step_data.poi_id)
+            if poi is None:
+                raise ValueError("POI not found.")
 
         if step_data.arrival_time is not None and step_data.departure_time is not None:
             if step_data.arrival_time >= step_data.departure_time:
@@ -328,7 +344,9 @@ class ItineraryRepository(BaseRepository):
 
         step = ItineraryStep(
             itinerary_id=itinerary_id,
-            poi_id=step_data.poi_id,
+            poi_id=None if step_data.is_generic else step_data.poi_id,
+            name=step_data.name,
+            is_generic=step_data.is_generic,
             step_order=max_order + 1,
             arrival_time=step_data.arrival_time,
             departure_time=step_data.departure_time,
@@ -658,8 +676,8 @@ class ItineraryRepository(BaseRepository):
                     day=day_index or 1,
                     date=day_date.isoformat() if day_date is not None else "",
                     order=step.step_order,
-                    poi_name=step.poi.name if step.poi is not None else "",
-                    poi_description=step.poi.description if step.poi is not None else None,
+                    poi_name=step.name if step.is_generic else (step.poi.name if step.poi is not None else ""),
+                    poi_description=None if step.is_generic else (step.poi.description if step.poi is not None else None),
                     poi_address=None,
                     arrival_time=arrival_time.strftime("%H:%M") if arrival_time is not None else None,
                     departure_time=departure_time.strftime("%H:%M") if departure_time is not None else None,
@@ -755,6 +773,9 @@ class ItineraryRepository(BaseRepository):
         if step is None:
             return None
 
+        if step.is_generic or step.poi_id is None:
+            raise ValueError("Generic itinerary steps cannot be marked as POI visits.")
+
         existing = await db.execute(
             select(POIVisit).where(
                 POIVisit.poi_id == step.poi_id,
@@ -794,11 +815,11 @@ class ItineraryRepository(BaseRepository):
         if itinerary is None:
             return None
 
-        poi_ids = [step.poi_id for step in itinerary.steps]
+        poi_ids = [step.poi_id for step in itinerary.steps if step.poi_id is not None and not step.is_generic]
         if not poi_ids:
             return []
 
-        step_by_poi = {step.poi_id: step.id for step in itinerary.steps}
+        step_by_poi = {step.poi_id: step.id for step in itinerary.steps if step.poi_id is not None and not step.is_generic}
 
         result = await db.execute(
             select(POIVisit)
@@ -857,8 +878,12 @@ class ItineraryRepository(BaseRepository):
             id=step.id,
             itinerary_id=step.itinerary_id,
             poi_id=step.poi_id,
-            poi_name=step.poi.name if step.poi is not None else None,
-            poi_description=step.poi.description if step.poi is not None else None,
+            name=step.name,
+            is_generic=step.is_generic,
+            lat=None,
+            lon=None,
+            poi_name=step.name if step.is_generic else (step.poi.name if step.poi is not None else None),
+            poi_description=None if step.is_generic else (step.poi.description if step.poi is not None else None),
             step_order=step.step_order,
             arrival_time=arrival_time,
             departure_time=departure_time,

@@ -88,7 +88,7 @@ def _conversation_mode_for_turn(turn_type: object) -> str:
     return "exploring"
 
 
-def _estimate_route_ready_score(preferences: dict[str, Any]) -> float:
+def estimate_route_ready_score(preferences: dict[str, Any]) -> float:
     score = 0.2
     score += min(len(preferences.get("positive_preferences", [])) * 0.12, 0.36)
     score += min(len(preferences.get("tags", [])) * 0.08, 0.24)
@@ -191,7 +191,7 @@ def merge_preferences(
     preferences["last_added_tags"] = last_added_tags
     preferences["consumed_reply_ids"] = sorted(consumed_reply_ids)
     preferences["turn_count"] = int(preferences.get("turn_count", 0)) + 1
-    preferences["route_ready_score"] = _estimate_route_ready_score(preferences)
+    preferences["route_ready_score"] = estimate_route_ready_score(preferences)
     if turn_classification:
         preferences["last_turn_type"] = turn_classification.get("turn_type")
         preferences["last_question_topic"] = turn_classification.get("topic")

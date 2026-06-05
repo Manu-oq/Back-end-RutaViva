@@ -20,6 +20,7 @@ def get_gpt_mini_client() -> AsyncOpenAI:
         _gpt_mini_client = AsyncOpenAI(
             api_key=settings.openai_api_key,
             timeout=settings.gpt_mini_timeout_seconds,
+            default_headers={"User-Agent": "RutaVivaBackend/0.1 (contact: xalex0905@gmail.com)"},
         )
     return _gpt_mini_client
 

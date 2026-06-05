@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ara_session import AraSession
 from app.models.user import User
+from app.repositories.ara_repository import AraRepository
 from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.ara import AraGenerateItineraryRequest
@@ -24,6 +25,7 @@ from app.services.weather_service import get_forecast as get_weather_forecast
 logger = logging.getLogger(__name__)
 
 poi_repository = POIRepository()
+ara_repository = AraRepository()
 itinerary_repository = ItineraryRepository()
 
 
@@ -77,10 +79,13 @@ class ToolOrchestrator:
             if replacement_context and replacement_context.get("itinerary_id") and replacement_context.get("step_id"):
                 return await self._handle_step_replacement(db, user, session, selected_poi, replacement_context)
             self._remember_selected_poi(session, selected_poi)
-            result.response_text = (
+            self._fill_active_slot(session, selected_poi)
+            slot_warning = await self._validate_slot_coherence(session, selected_poi, user, db)
+            base_response = (
                 f"Perfecto, deje seleccionado {selected_poi.name} para considerarlo en tu viaje. "
                 "Puedes seguir eligiendo lugares o pedirme que arme el itinerario."
             )
+            result.response_text = f"{base_response}\n\n{slot_warning}" if slot_warning else base_response
             result.status = "respond"
             result.candidate_pois = []
             # Use comprehension quick replies if available, otherwise let response generator decide
@@ -154,13 +159,23 @@ class ToolOrchestrator:
                     session,
                     current_user_message=current_user_message,
                 )
-                # Si no encontro el POI, redirigir a busqueda
-                if answer.get("evidence_level") == "unknown" and "no tengo" in answer.get("text", "").lower():
-                    logger.info("answer_question no encontro POI, redirigiendo a search_pois")
-                    tools = [t for t in tools if t != "answer_question"]
-                    if "search_pois" not in tools:
-                        tools.append("search_pois")
-                    # Continue to search instead of returning
+                if answer.get("evidence_level") == "unknown":
+                    user_message = (current_user_message or "").lower()
+                    travel_verbs = ["ir a", "visitar", "conocer", "quedarme en", "quedarse en",
+                                    "viajar a", "destino", "lugar", "zona", "busco", "quiero"]
+                    is_travel_context = any(verb in user_message for verb in travel_verbs)
+                    is_itinerary_flow = session.status in ("clarifying", "confirming")
+                    has_destino = any(e.tipo == "destino" for e in comprehension.entidades)
+
+                    if is_travel_context or is_itinerary_flow or has_destino:
+                        logger.info("answer_question redirigiendo a search_pois (contexto de viaje detectado)")
+                        tools = [t for t in tools if t != "answer_question"]
+                        if "search_pois" not in tools:
+                            tools.append("search_pois")
+                    else:
+                        result.response_text = "No entendí bien tu pregunta. ¿Podés reformularla o decirme más sobre tu destino?"
+                        result.status = "clarify"
+                        return result
                 else:
                     result.response_text = answer["text"]
                     result.status = "respond"
@@ -253,10 +268,20 @@ class ToolOrchestrator:
 
             session.candidate_poi_ids = [poi.id for poi in pois]
             self._remember_shown_pois(session, [poi.id for poi in pois])
-            return {"type": "pois", "pois": [self._serialize_poi(poi) for poi in pois], "count": len(pois)}
+            place_name = destino or search_query or "la zona"
+            return {
+                "type": "pois",
+                "pois": [self._serialize_poi(poi) for poi in pois],
+                "count": len(pois),
+                "place_name": place_name,
+                "no_results_message": (
+                    f"No encontré lugares cerca de {place_name}. ¿Querés probar con otra zona?"
+                    if not pois else None
+                ),
+            }
         except Exception as exc:
             logger.warning("search_pois failed: %s", exc)
-            return {"type": "pois", "pois": [], "count": 0}
+            return {"type": "pois", "pois": [], "count": 0, "place_name": search_query or None}
 
     async def _search_diverse_pois(
         self,
@@ -269,8 +294,6 @@ class ToolOrchestrator:
         Parallelizes category searches and caches the embedding to avoid
         redundant OpenAI API calls.
         """
-        import asyncio
-
         from app.models.category import Category
         from app.services.ara_v2.category_mapping import CATEGORY_INTENT_TO_DB_NAMES
         from app.services.embedding_service import get_embedding_service
@@ -320,8 +343,9 @@ class ToolOrchestrator:
                 logger.warning("Diverse search failed for category %s: %s", cat_id, exc)
                 return []
 
-        tasks = [_search_single_category(cat_id) for cat_id in category_ids]
-        category_results = await asyncio.gather(*tasks, return_exceptions=True)
+        category_results = await asyncio.gather(
+            *(_search_single_category(cat_id) for cat_id in category_ids),
+        )
 
         # Combine results, deduplicating by ID
         all_pois: list = []
@@ -462,14 +486,23 @@ class ToolOrchestrator:
             if candidate_name and candidate_name in normalized_message:
                 return candidate
 
-        for name in names_to_match:
-            if not name:
-                continue
-            normalized_name = self._normalize_for_name_match(name)
-            if normalized_name and normalized_name in normalized_message:
-                matches = await poi_repository.search_by_name(db, name, limit=1)
-                if matches:
-                    return matches[0]
+        async def _search_one_name(name: str) -> Any | None:
+            try:
+                normalized_name = self._normalize_for_name_match(name)
+                if normalized_name and normalized_name in normalized_message:
+                    matches = await poi_repository.search_by_name(db, name, limit=1)
+                    if matches:
+                        return matches[0]
+            except Exception:
+                pass
+            return None
+
+        search_names = [n for n in names_to_match if n]
+        if search_names:
+            results = await asyncio.gather(*[_search_one_name(name) for name in search_names])
+            for result in results:
+                if result is not None:
+                    return result
 
         return None
 
@@ -485,6 +518,114 @@ class ToolOrchestrator:
         preferences["selected_poi_ids"] = selected
         preferences["trip_draft"] = trip_draft
         session.preferences_data = preferences
+
+    @staticmethod
+    def _fill_active_slot(session: AraSession, selected_poi: Any) -> None:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        slots = trip_draft.get("slots", [])
+        if not slots:
+            return
+        for slot in slots:
+            if slot.get("status") in ("empty", "requested", "category_selected"):
+                slot["status"] = "filled"
+                slot["poi_id"] = str(getattr(selected_poi, "id", ""))
+                break
+        trip_draft["slots"] = slots
+        preferences["trip_draft"] = trip_draft
+        session.preferences_data = preferences
+
+    async def _validate_slot_coherence(
+        self,
+        session: AraSession,
+        new_poi: Any,
+        user: User,
+        db: AsyncSession,
+    ) -> str | None:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        slots = trip_draft.get("slots", [])
+        if not slots:
+            return None
+
+        active_slot = None
+        for slot in slots:
+            if slot.get("status") == "empty":
+                active_slot = slot
+                break
+        if active_slot is None:
+            for slot in slots:
+                if slot.get("status") == "filled" and not slot.get("poi_id"):
+                    active_slot = slot
+                    break
+        if active_slot is None:
+            for slot in slots:
+                if slot.get("status") == "requested":
+                    active_slot = slot
+                    break
+        if active_slot is None:
+            return None
+
+        selected_ids = trip_draft.get("selected_poi_ids", [])
+        new_poi_id = str(getattr(new_poi, "id", ""))
+        prev_poi_id = None
+        if len(selected_ids) >= 2:
+            prev_poi_id = selected_ids[-2]
+
+        new_lat = getattr(new_poi, "latitude", None) or getattr(new_poi, "lat", None)
+        new_lon = getattr(new_poi, "longitude", None) or getattr(new_poi, "lon", None)
+        if prev_poi_id is None or new_lat is None or new_lon is None:
+            return None
+
+        try:
+            from app.models.poi import POI
+            prev_poi = await poi_repository.get_poi_by_id(db, UUID(prev_poi_id))
+            if prev_poi is None:
+                return None
+            prev_lat = getattr(prev_poi, "latitude", None)
+            prev_lon = getattr(prev_poi, "longitude", None)
+            if prev_lat is None or prev_lon is None:
+                return None
+        except Exception:
+            return None
+
+        has_transport = (
+            user.tourist_profile.has_own_transport
+            if user.tourist_profile else False
+        )
+        profile = "driving" if has_transport else "foot"
+
+        try:
+            from app.services.osrm_client import get_osrm_client
+            client = get_osrm_client()
+            route = await client.get_route(prev_lat, prev_lon, new_lat, new_lon, profile=profile)
+        except Exception:
+            return None
+
+        km = route["distance_meters"] / 1000.0
+        mins = route["duration_seconds"] / 60.0
+
+        slot_period = active_slot.get("period")
+        slot_time = active_slot.get("time")
+
+        period_warning = None
+        period_limits = {"morning": 120, "afternoon": 90, "night": 60}
+        limit = period_limits.get(slot_period, 180) if slot_period else 180
+        if slot_period and mins > limit:
+            period_names = {"morning": "la mañana", "afternoon": "la tarde", "night": "la noche"}
+            period_name = period_names.get(slot_period, "ese momento")
+            period_warning = f"Tene en cuenta que el traslado es largo para una actividad de {period_name}."
+
+        transport_warning = None
+        if not has_transport and km > 10:
+            bus_mins = (km / 30.0) * 60.0
+            transport_warning = (
+                f"Este lugar queda a {km:.0f}km. Sin transporte propio, el traslado toma "
+                f"aproximadamente {bus_mins:.0f} minutos en bus o taxi. ¿Te animas?"
+            )
+
+        warnings = [w for w in (period_warning, transport_warning) if w]
+        return " ".join(warnings) if warnings else None
 
     @staticmethod
     def _filter_repeated_pois(session: AraSession, pois: list[Any]) -> list[Any]:
@@ -543,14 +684,16 @@ class ToolOrchestrator:
             if selected_poi_ids:
                 from app.schemas.poi import POIResponse
                 existing_ids = {getattr(p, "id", None) for p in candidate_pois} | {p.get("id") for p in candidate_pois if isinstance(p, dict)}
-                for sid in selected_poi_ids:
-                    try:
-                        selected_poi = await poi_repository.get_poi_by_id(db, UUID(str(sid)))
-                        if selected_poi and selected_poi.id not in existing_ids:
+                try:
+                    selected_pois = await poi_repository.get_pois_by_ids(
+                        db, [UUID(str(sid)) for sid in selected_poi_ids],
+                    )
+                    for selected_poi in selected_pois:
+                        if selected_poi.id not in existing_ids:
                             candidate_pois = [selected_poi] + list(candidate_pois)
                             existing_ids.add(selected_poi.id)
-                    except Exception:
-                        logger.warning("Could not load selected POI %s", sid)
+                except Exception:
+                    logger.warning("Could not load selected POIs batch")
 
         async def _log_phase(name: str, extra: dict | None = None) -> None:
             logger.info("Itinerary phase: %s extra=%s", name, extra)
@@ -565,6 +708,9 @@ class ToolOrchestrator:
             candidate_pois=candidate_pois,
             weather_forecast=weather_forecast,
             on_phase=_log_phase,
+            ara_repository=ara_repository,
+            itinerary_repository=itinerary_repository,
+            poi_repository=poi_repository,
         )
         return itinerary
 
@@ -600,7 +746,7 @@ class ToolOrchestrator:
             lat=None, lon=None, radius=8000,
         )
 
-        return {"alternatives": alternatives[:3], "current_poi_name": current_poi.name}
+        return {"alternatives": [self._serialize_poi(alt) for alt in alternatives[:3]], "current_poi_name": current_poi.name}
 
     async def _handle_step_replacement(
         self,

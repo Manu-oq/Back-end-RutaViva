@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.itinerary_constants import CHILE_TZ
 from app.repositories.itinerary_repository import ItineraryRepository
-from app.schemas.itinerary import ItineraryStepWeather, ItineraryStepWeatherResponse
+from app.schemas.itinerary import ItineraryDayWeatherResponse, ItineraryStepWeather, ItineraryStepWeatherResponse
+from app.schemas.weather import WeatherDailyForecast
 
 NOT_APPLICABLE_MESSAGE = "El clima ya no se consulta para itinerarios finalizados o pasados."
 OUT_OF_RANGE_MESSAGE = "El pronóstico detallado estará disponible más cerca de la fecha del viaje."
@@ -91,6 +92,8 @@ async def get_itinerary_step_weather(
     seen_coords: dict[tuple[float, float], set[date]] = {}
 
     for step in itinerary.steps:
+        if getattr(step, "is_generic", False) or step.poi_id is None:
+            continue
         if step.arrival_time is None:
             continue
 
@@ -129,6 +132,17 @@ async def get_itinerary_step_weather(
 
     results: list[ItineraryStepWeatherResponse] = []
     for step in itinerary.steps:
+        if getattr(step, "is_generic", False) or step.poi_id is None:
+            results.append(
+                _build_weather_response(
+                    step,
+                    weather_available=False,
+                    weather_status="not_applicable",
+                    weather_message=NOT_APPLICABLE_MESSAGE,
+                )
+            )
+            continue
+
         step_date = None
         if step.arrival_time is not None:
             step_date = step.arrival_time.astimezone(CHILE_TZ).date() if step.arrival_time.tzinfo else step.arrival_time.date()
@@ -177,3 +191,72 @@ async def get_itinerary_step_weather(
         )
 
     return results
+
+
+async def get_itinerary_day_weather(
+    db: AsyncSession,
+    itinerary_id: UUID,
+    tourist_id: UUID,
+    itinerary_repo: ItineraryRepository,
+    weather_service_module: Any,
+) -> ItineraryDayWeatherResponse:
+    itinerary = await itinerary_repo.get_itinerary_by_id(
+        db,
+        itinerary_id=itinerary_id,
+        tourist_id=tourist_id,
+    )
+    if itinerary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Itinerary not found.")
+
+    if itinerary.is_past or itinerary.status in {"completed", "cancelled"}:
+        return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=[])
+
+    if itinerary.start_date is None or itinerary.end_date is None:
+        return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=[])
+
+    today = _today_in_chile()
+    trip_start = itinerary.start_date
+    trip_end = itinerary.end_date
+
+    forecast_start = max(today, trip_start)
+    forecast_end = min(
+        trip_end,
+        today + timedelta(days=getattr(weather_service_module, "MAX_FORECAST_DAYS", 5)),
+    )
+
+    if forecast_start > forecast_end:
+        return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=[])
+
+    center_lat: float | None = None
+    center_lon: float | None = None
+    for step in itinerary.steps:
+        if step.arrival_time is not None:
+            coords = await itinerary_repo.get_step_coordinates_batch(db, [step.id])
+            if step.id in coords:
+                center_lat, center_lon = coords[step.id]
+                break
+
+    if center_lat is None or center_lon is None:
+        return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=[])
+
+    try:
+        daily_forecasts = await weather_service_module.get_daily_forecast(
+            lat=center_lat,
+            lon=center_lon,
+            start_date=forecast_start,
+            end_date=forecast_end,
+        )
+    except (ValueError, httpx.HTTPError):
+        return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=[])
+
+    trip_days: set[date] = {
+        forecast_start + timedelta(days=i)
+        for i in range((forecast_end - forecast_start).days + 1)
+    }
+
+    daily: list[WeatherDailyForecast] = [
+        f for f in daily_forecasts if f.date in trip_days
+    ]
+    daily.sort(key=lambda f: f.date)
+
+    return ItineraryDayWeatherResponse(itinerary_id=itinerary_id, daily=daily)

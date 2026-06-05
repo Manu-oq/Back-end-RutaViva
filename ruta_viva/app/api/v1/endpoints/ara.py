@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from collections.abc import AsyncGenerator
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -15,6 +14,7 @@ from app.models.user import User
 from app.repositories.ara_repository import AraRepository
 from app.schemas.ara import (
     AraGenerateItineraryRequest,
+    AraIntentUpdate,
     AraMessageCreate,
     AraMessagesResponse,
     AraSessionCreate,
@@ -32,6 +32,8 @@ ara_repository = AraRepository()
 
 router = APIRouter(tags=["ara"])
 
+logger = logging.getLogger(__name__)
+
 
 def _ensure_tourist(current_user: User) -> None:
     if current_user.tourist_profile is None:
@@ -47,6 +49,7 @@ async def create_ara_session(
     current_user: User = Depends(get_current_user),
 ) -> AraSessionResponse:
     _ensure_tourist(current_user)
+    logger.info("Creating Ara session for user=%s", current_user.id)
     return await create_session_v2(db, current_user, payload)
 
 
@@ -60,6 +63,7 @@ async def add_ara_message(
     current_user: User = Depends(get_current_user),
 ) -> AraSessionResponse:
     _ensure_tourist(current_user)
+    logger.info("Adding message to session=%s user=%s", session_id, current_user.id)
     return await handle_message_v2(db, current_user, session_id, payload)
 
 
@@ -82,6 +86,34 @@ async def list_ara_messages(
     )
 
 
+@router.patch("/sessions/{session_id}/intent", response_model=AraSessionResponse)
+async def update_session_intent(
+    session_id: UUID,
+    payload: AraIntentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AraSessionResponse:
+    session = await ara_repository.get_session(db, session_id, current_user.id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from app.services.ara_v2.conversation_processor import get_conversation_processor
+
+    processor = get_conversation_processor()
+    try:
+        response = await processor.update_session_intent(
+            db=db,
+            session=session,
+            payload=payload,
+        )
+        await ara_repository.commit_or_rollback(db)
+        return response
+    except Exception:
+        logger.exception("Failed to update session intent for session=%s", session_id)
+        await db.rollback()
+        raise
+
+
 @router.post(
     "/sessions/{session_id}/generate-itinerary/stream",
 )
@@ -96,6 +128,7 @@ async def stream_generate_itinerary(
     llm_service: ItineraryGenerator = Depends(get_itinerary_generator),
 ) -> StreamingResponse:
     _ensure_tourist(current_user)
+    logger.info("Starting itinerary stream generation for session=%s user=%s", session_id, current_user.id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         async for event in stream_itinerary_generation(
@@ -106,7 +139,7 @@ async def stream_generate_itinerary(
             embedding_service=embedding_service,
             llm_service=llm_service,
         ):
-            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+            yield event
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

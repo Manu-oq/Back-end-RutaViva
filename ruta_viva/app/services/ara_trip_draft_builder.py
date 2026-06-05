@@ -21,7 +21,7 @@ from app.core.ara_constants import (
 )
 from app.schemas.poi import POIResponse
 from app.services.ara_message_normalizer import normalize_message
-from app.services.ara_preference_merger import _estimate_route_ready_score
+from app.services.ara_preference_merger import estimate_route_ready_score
 
 
 
@@ -174,51 +174,6 @@ def _extract_day_segments(normalized: str, start_date: date, end_date: date) -> 
         next_position = deduped[offset + 1][0] if offset + 1 < len(deduped) else len(normalized)
         segments.append((day_index, normalized[position:next_position]))
     return segments
-
-
-def _detect_meal_slot(normalized: str) -> str | None:
-    if any(term in normalized for term in ("desayuno", "desayunar", "mañana", "manana")):
-        return "breakfast"
-    if any(term in normalized for term in ("almuerzo", "almorzar", "mediodia", "medio dia", "mediodía")):
-        return "lunch"
-    if any(term in normalized for term in ("once", "tarde")):
-        return "once"
-    if any(term in normalized for term in ("cena", "cenar", "noche")):
-        return "dinner"
-    return None
-
-
-def _detect_activity_slot(normalized: str) -> str | None:
-    if any(term in normalized for term in ("mañana", "manana", "temprano")):
-        return "morning"
-    if "tarde" in normalized:
-        return "afternoon"
-    if "noche" in normalized:
-        return "night"
-    return None
-
-
-def _detect_repeat_scope(normalized: str) -> str | None:
-    if any(term in normalized for term in ("todos los dias", "todos los días", "cada dia", "cada día")):
-        return "all_days"
-    if any(term in normalized for term in ("todas las noches", "cada noche", "todas las cenas")):
-        return "all_days"
-    return None
-
-
-def _scope_from_context(
-    *,
-    day_index: int | None,
-    slot: str | None,
-    repeat_scope: str | None,
-) -> str:
-    if repeat_scope:
-        return repeat_scope
-    if day_index is not None and slot:
-        return "slot"
-    if day_index is not None:
-        return "day"
-    return "unspecified"
 
 
 def _contains_structured_entry(values: list[dict[str, Any]], entry: dict[str, Any]) -> bool:

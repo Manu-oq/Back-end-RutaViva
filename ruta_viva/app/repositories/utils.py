@@ -50,7 +50,7 @@ def sanitize_description(description: str | None) -> str | None:
 def _is_valid_image_url(url: str | None) -> bool:
     if not url or not isinstance(url, str):
         return False
-    return url.startswith("http://") or url.startswith("https://")
+    return url.startswith("http://") or url.startswith("https://") or url.startswith("/media/")
 
 
 def sanitize_multimedia_urls(multimedia: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -104,4 +104,7 @@ def build_poi_response_from_row(
         distance_meters=distance_meters,
         verification_status=poi.verification_status,
         confidence_score=float(poi.confidence_score) if poi.confidence_score is not None else 0.0,
+        entrepreneur_id=poi.entrepreneur_id,
+        created_by_user_id=poi.created_by_user_id,
+        created_at=poi.created_at,
     )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -11,11 +11,12 @@ from app.core.ara_constants import KNOWN_DESTINATION_NAMES
 from app.models.ara_session import AraSession
 from app.models.conversation_memory import ConversationMemory
 from app.models.user import User
-from app.schemas.ara import AraMessageResponse, AraQuickReply, AraSessionResponse
+from app.schemas.ara import AraIntentInfo, AraIntentUpdate, AraMessageResponse, AraPreferenceSummary, AraQuickReply, AraSessionResponse
 from app.schemas.ara_comprehension import ComprehensionResult
 from app.services.ara_v2.comprehender import get_comprensor
 from app.services.ara_v2.memory_service import get_memory_service
 from app.services.ara_v2.response_generator import get_response_generator
+from app.services.ara_v2.slot_state import are_all_slots_filled, is_slot_filled
 from app.services.ara_v2.tool_orchestrator import get_tool_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -197,7 +198,10 @@ class ConversationProcessor:
                 user_message=self._to_message_response(user_msg),
                 assistant_message=self._to_message_response(assistant_msg),
                 quick_replies=[quick_reply_qr],
+                intent=self._build_intent_info(session, comprehension),
+                preferences=self._build_preference_summary(session),
                 candidate_pois=[],
+                all_slots_filled=self._are_all_slots_filled(session),
                 progress={"stream_url": stream_url, "generation_status": "starting"},
             )
 
@@ -214,6 +218,7 @@ class ConversationProcessor:
             db, session, "assistant",
             response["text"],
             quick_replies=[qr.model_dump(mode="json") for qr in response.get("quick_replies", [])],
+            metadata=response.get("metadata"),
         )
 
         return AraSessionResponse(
@@ -224,8 +229,64 @@ class ConversationProcessor:
             user_message=self._to_message_response(user_msg),
             assistant_message=self._to_message_response(assistant_msg),
             quick_replies=response.get("quick_replies", []),
+            intent=self._build_intent_info(session, comprehension),
+            preferences=self._build_preference_summary(session),
             candidate_pois=self._build_candidate_pois(tool_result.candidate_pois),
             weather=tool_result.weather_forecast,
+            all_slots_filled=self._are_all_slots_filled(session),
+            progress=self._build_progress(session),
+        )
+
+    async def update_session_intent(
+        self,
+        db: AsyncSession,
+        session: AraSession,
+        payload: AraIntentUpdate,
+    ) -> AraSessionResponse:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        critical_changed = False
+
+        if payload.destination is not None:
+            trip_draft["destination"] = payload.destination
+            trip_draft["has_destination"] = True
+            critical_changed = True
+
+        if payload.start_date is not None:
+            session.start_date = payload.start_date
+            trip_draft["start_date"] = payload.start_date.isoformat()
+            critical_changed = True
+
+        if payload.end_date is not None:
+            session.end_date = payload.end_date
+            trip_draft["end_date"] = payload.end_date.isoformat()
+            critical_changed = True
+
+        if payload.pace is not None:
+            trip_draft["pace"] = payload.pace
+
+        if payload.interests is not None:
+            trip_draft["interests"] = payload.interests
+            trip_draft["activity_preferences"] = payload.interests
+
+        preferences["trip_draft"] = trip_draft
+
+        if critical_changed:
+            session.candidate_poi_ids = []
+
+        session.preferences_data = preferences
+        await db.flush()
+
+        return AraSessionResponse(
+            session_id=session.id,
+            status=session.status,
+            start_date=session.start_date,
+            end_date=session.end_date,
+            intent=self._build_intent_info(session),
+            preferences=self._build_preference_summary(session),
+            candidate_pois=[],
+            all_slots_filled=self._are_all_slots_filled(session),
+            progress=self._build_progress(session),
         )
 
     @staticmethod
@@ -303,8 +364,137 @@ class ConversationProcessor:
             trip_draft["destination"] = destinos[0]
 
         trip_draft["has_destination"] = ConversationProcessor._session_has_destination(session) or bool(destinos)
+
+        if comprehension.modo == "auto":
+            preferences["auto_generate_requested"] = True
+            preferences["surprise_route_requested"] = True
+            trip_draft["mode"] = "auto"
+        elif comprehension.modo == "mixto":
+            restricciones = [e for e in comprehension.entidades if e.tipo == "restriccion"]
+            if restricciones:
+                locked = trip_draft.get("locked_steps", [])
+                if isinstance(locked, list):
+                    for r in restricciones:
+                        locked.append({"restriccion": r.valor, "confianza": r.confianza})
+                    trip_draft["locked_steps"] = locked
+            trip_draft["mode"] = "mixto"
+        else:
+            trip_draft["mode"] = "guiado"
+
+        if comprehension.modo in ("auto", "mixto"):
+            comprehension.preguntas_pendientes = []
+
+        slots = ConversationProcessor._detect_temporal_slots(user_message)
+        if slots:
+            existing_slots = trip_draft.get("slots", [])
+            merged = ConversationProcessor._merge_slots(existing_slots, slots)
+            trip_draft["slots"] = merged
+
+        ConversationProcessor._fill_empty_slots_on_category(trip_draft, comprehension)
+
         preferences["trip_draft"] = trip_draft
         session.preferences_data = preferences
+
+    @staticmethod
+    def _detect_temporal_slots(user_message: str) -> list:
+        from app.services.ara_v2.slot_detector import detect_slots
+        return detect_slots(user_message)
+
+    @staticmethod
+    def _merge_slots(existing: list, new_slots: list) -> list:
+        merged = list(existing)
+        for slot in new_slots:
+            matched_idx = -1
+            for i, existing_slot in enumerate(merged):
+                if existing_slot.get("type") != slot.get("type"):
+                    continue
+                if slot.get("type") == "meal" and existing_slot.get("meal_type") == slot.get("meal_type"):
+                    matched_idx = i
+                    break
+                if slot.get("type") == "activity" and existing_slot.get("period") == slot.get("period"):
+                    matched_idx = i
+                    break
+            if matched_idx >= 0:
+                merged_slot = dict(merged[matched_idx])
+                for key, value in slot.items():
+                    if value is not None and value != "":
+                        merged_slot[key] = value
+                merged[matched_idx] = merged_slot
+            else:
+                merged.append(slot)
+        return merged
+
+    @staticmethod
+    def _fill_empty_slots_on_category(
+        trip_draft: dict,
+        comprehension: ComprehensionResult,
+    ) -> None:
+        has_category = any(e.tipo == "categoria" for e in comprehension.entidades)
+        if not has_category:
+            return
+        slots = trip_draft.get("slots", [])
+        for slot in slots:
+            if slot.get("status") == "empty":
+                if slot.get("type") == "activity":
+                    slot["status"] = "category_selected"
+                else:
+                    slot["status"] = "filled"
+                break
+
+    @staticmethod
+    def _build_progress(session: AraSession) -> dict[str, Any] | None:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+        trip_days: list[dict[str, Any]] = trip_draft.get("trip_days") or []
+
+        if not trip_days and session.start_date and session.end_date:
+            from datetime import timedelta
+            total = (session.end_date - session.start_date).days + 1
+            if 0 < total <= 30:
+                from app.services.ara_trip_draft_builder import WEEKDAY_NAMES
+                trip_days = []
+                current = session.start_date
+                for i in range(total):
+                    trip_days.append({
+                        "day_index": i + 1,
+                        "day_date": current.isoformat(),
+                        "day_label": f"{WEEKDAY_NAMES[current.weekday()].capitalize()} {current.day:02d}",
+                        "status": "in_progress" if i == 0 else "pending",
+                        "steps": 0,
+                    })
+                    current += timedelta(days=1)
+
+        if not trip_days:
+            return None
+
+        focus = trip_draft.get("current_day_focus", 0)
+        days = []
+        for day in trip_days:
+            days.append({
+                "label": day.get("day_label", f"Día {day.get('day_index', '?')}"),
+                "date": day.get("day_date"),
+                "status": day.get("status", "pending"),
+                "is_focus": day.get("day_index", 0) == focus,
+                "steps": day.get("steps", 0),
+            })
+
+        lodging = trip_draft.get("lodging") or preferences.get("lodging")
+        lodging_info = {"name": lodging.get("name")} if isinstance(lodging, dict) else None
+
+        return {
+            "total_days": len(trip_days),
+            "current_day_focus": focus,
+            "days": days,
+            "lodging": lodging_info,
+        }
+
+    @staticmethod
+    def _is_slot_filled(slot: dict) -> bool:
+        return is_slot_filled(slot)
+
+    @staticmethod
+    def _are_all_slots_filled(session: AraSession) -> bool:
+        return are_all_slots_filled(session)
 
     @staticmethod
     def _session_has_destination(session: AraSession) -> bool:
@@ -388,6 +578,7 @@ class ConversationProcessor:
         role: str,
         content: str,
         quick_replies: list[dict] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Agrega un mensaje a la sesion."""
         from app.models.ara_message import AraMessage
@@ -396,6 +587,7 @@ class ConversationProcessor:
             role=role,
             content=content,
             quick_replies=quick_replies,
+            message_metadata=metadata,
         )
         db.add(msg)
         await db.flush()
@@ -409,6 +601,91 @@ class ConversationProcessor:
         """Convierte AraMessage ORM a AraMessageResponse."""
         from app.repositories.ara_repository import AraRepository
         return AraRepository().to_message_response(msg)
+
+    @staticmethod
+    def _build_intent_info(
+        session: AraSession,
+        comprehension: ComprehensionResult | None = None,
+    ) -> AraIntentInfo:
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+
+        locations: list[str] = []
+        destination = trip_draft.get("destination")
+        if destination and isinstance(destination, str):
+            locations.append(destination)
+        dest_zones = trip_draft.get("destination_zones", [])
+        if dest_zones:
+            locations.extend([z.get("label", z.get("name", "")) for z in dest_zones])
+
+        turn_count = len(session.messages) if session.messages else 0
+
+        return AraIntentInfo(
+            intents=comprehension.intenciones if comprehension else [],
+            primary_intent=comprehension.intencion_principal if comprehension else None,
+            specificity="high" if trip_draft.get("has_destination") else "low",
+            locations=locations[:5],
+            turn_count=turn_count,
+        )
+
+    @staticmethod
+    def _build_preference_summary(session: AraSession) -> AraPreferenceSummary:
+        from app.services.ara_preference_merger import estimate_route_ready_score
+
+        preferences = dict(session.preferences_data or {})
+        trip_draft = dict(preferences.get("trip_draft") or {})
+
+        tags: list[str] = []
+        meal_prefs = trip_draft.get("meal_preferences") or []
+        activity_prefs = trip_draft.get("activity_preferences") or []
+        if isinstance(meal_prefs, list):
+            tags.extend(meal_prefs)
+        if isinstance(activity_prefs, list):
+            tags.extend(activity_prefs)
+
+        global_prefs = trip_draft.get("global_preferences") or {}
+        positive: list[str] = []
+        if isinstance(global_prefs, dict):
+            for key in ("meal_preferences", "activity_preferences", "lodging_preferences"):
+                val = global_prefs.get(key, [])
+                if isinstance(val, list):
+                    positive.extend(val)
+
+        completed: list[str] = []
+        if session.start_date and session.end_date:
+            completed.append("fechas")
+        if trip_draft.get("has_destination"):
+            completed.append("destino")
+        if trip_draft.get("lodging") or preferences.get("lodging"):
+            completed.append("alojamiento")
+
+        selected_poi_ids = trip_draft.get("selected_poi_ids") or preferences.get("selected_poi_ids") or []
+
+        score_prefs: dict[str, Any] = {
+            "positive_preferences": positive,
+            "tags": tags,
+            "turn_count": len(session.messages) if session.messages else 0,
+            "completed_dimensions": completed,
+            "selected_poi_ids": [str(pid) for pid in selected_poi_ids],
+        }
+
+        score = estimate_route_ready_score(score_prefs)
+        if ConversationProcessor._are_all_slots_filled(session):
+            score = max(score, 0.9)
+
+        return AraPreferenceSummary(
+        tags=tags,
+        positive_preferences=positive,
+        negative_constraints=global_prefs.get("negative_constraints", []) if isinstance(global_prefs, dict) else [],
+        completed_dimensions=completed,
+        trip_draft=trip_draft,
+        destination_scope=trip_draft.get("destination_scope"),
+        selected_poi_ids=[str(pid) for pid in selected_poi_ids],
+        conversation_mode=preferences.get("conversation_mode"),
+        route_ready_score=score,
+        lodging=preferences.get("lodging") or trip_draft.get("lodging"),
+        day_focus=trip_draft.get("current_day_focus", 0),
+    )
 
     @staticmethod
     def _build_candidate_pois(candidate_pois: list[dict] | None) -> list:

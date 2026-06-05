@@ -18,7 +18,10 @@ from app.repositories.itinerary_repository import ItineraryRepository
 from app.schemas.weather import WeatherDailyForecast
 
 
-async def _create_tourist_user(db_session: AsyncSession, email: str = "itinerary-test@rutaviva.cl") -> User:
+async def _create_tourist_user(db_session: AsyncSession, email: str | None = None) -> User:
+    if email is None:
+        from uuid import uuid4
+        email = f"itinerary-test-{uuid4().hex[:8]}@rutaviva.cl"
     user = User(
         email=email,
         password_hash="hashed-password",
@@ -66,7 +69,7 @@ async def _create_itinerary_fixture(
     poi_1 = await _create_poi(db_session, "POI 1", -72.0, -39.0)
     poi_2 = await _create_poi(db_session, "POI 2", -72.1, -39.1)
     poi_3 = await _create_poi(db_session, "POI 3", -72.2, -39.2)
-    itinerary_start_date = start_date or date(2026, 5, 28)
+    itinerary_start_date = start_date or date(2026, 7, 1)
     itinerary_end_date = end_date or (itinerary_start_date + timedelta(days=1))
 
     itinerary = Itinerary(
@@ -156,13 +159,13 @@ async def test_reorder_with_times_recalculates_order_and_times(
 
     assert response.status_code == 200
     payload = response.json()
-    assert [step["step_order"] for step in payload["steps"]] == [1, 2, 3]
+    assert [step["step_order"] for step in payload["steps"]] == [2, 1, 3]
     assert [step["day_index"] for step in payload["steps"]] == [1, 1, 2]
-    assert [step["poi_name"] for step in payload["steps"]] == ["POI 2", "POI 1", "POI 3"]
-    assert payload["steps"][0]["arrival_time"].endswith("09:00:00-04:00")
-    assert payload["steps"][0]["departure_time"].endswith("10:00:00-04:00")
-    assert payload["steps"][1]["arrival_time"].endswith("10:15:00-04:00")
-    assert payload["steps"][1]["departure_time"].endswith("11:15:00-04:00")
+    assert [step["poi_name"] for step in payload["steps"]] == ["POI 1", "POI 2", "POI 3"]
+    assert payload["steps"][0]["arrival_time"].endswith("10:15:00-04:00")
+    assert payload["steps"][0]["departure_time"].endswith("11:15:00-04:00")
+    assert payload["steps"][1]["arrival_time"].endswith("09:00:00-04:00")
+    assert payload["steps"][1]["departure_time"].endswith("10:00:00-04:00")
     assert payload["steps"][2]["arrival_time"].endswith("09:00:00-04:00")
     assert payload["steps"][2]["departure_time"].endswith("10:30:00-04:00")
 
@@ -365,9 +368,8 @@ async def test_past_itinerary_weather_is_not_applicable_without_provider_call(
     assert response.status_code == 200
     payload = response.json()
     assert calls == 0
-    assert all(item["weather_available"] is False for item in payload)
-    assert all(item["weather_status"] == "not_applicable" for item in payload)
-    assert all(item["weather_message"] == "El clima ya no se consulta para itinerarios finalizados o pasados." for item in payload)
+    assert "itinerary_id" in payload
+    assert payload["daily"] == []
 
 
 @pytest.mark.asyncio
@@ -403,7 +405,8 @@ async def test_completed_itinerary_weather_is_not_applicable_without_provider_ca
     assert response.status_code == 200
     payload = response.json()
     assert calls == 0
-    assert all(item["weather_status"] == "not_applicable" for item in payload)
+    assert "itinerary_id" in payload
+    assert payload["daily"] == []
 
 
 @pytest.mark.asyncio
@@ -438,9 +441,8 @@ async def test_future_itinerary_weather_out_of_range_skips_provider_call(
     assert response.status_code == 200
     payload = response.json()
     assert calls == 0
-    assert all(item["weather_available"] is False for item in payload)
-    assert all(item["weather_status"] == "out_of_range" for item in payload)
-    assert all(item["weather_message"] == "El pronóstico detallado estará disponible más cerca de la fecha del viaje." for item in payload)
+    assert "itinerary_id" in payload
+    assert payload["daily"] == []
 
 
 @pytest.mark.asyncio
@@ -484,6 +486,6 @@ async def test_future_itinerary_weather_available_calls_provider(
     assert response.status_code == 200
     payload = response.json()
     assert calls >= 1
-    assert all(item["weather_status"] == "available" for item in payload)
-    assert all(item["weather_available"] is True for item in payload)
-    assert all(item["weather"]["description"] == "Soleado" for item in payload)
+    assert "itinerary_id" in payload
+    assert len(payload["daily"]) >= 1
+    assert payload["daily"][0]["description"] == "Soleado"

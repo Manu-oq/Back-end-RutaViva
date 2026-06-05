@@ -1,5 +1,7 @@
 from uuid import UUID
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,12 +12,12 @@ from app.repositories.itinerary_repository import ItineraryRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.itinerary import (
     GenerateItineraryRequest,
+    ItineraryDayWeatherResponse,
     ItineraryExportResponse,
     ItineraryResponse,
     ItineraryStatusUpdate,
     ItineraryStepCreate,
     ItineraryStepUpdate,
-    ItineraryStepWeatherResponse,
     PaginatedItineraryResponse,
     ReorderItineraryStepsRequest,
     ReorderStepsWithTimesRequest,
@@ -27,7 +29,7 @@ from app.schemas.itinerary import (
 from app.schemas.poi import POIResponse
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 from app.services.itinerary_generation_service import generate_itinerary_from_request
-from app.services.itinerary_weather_service import get_itinerary_step_weather
+from app.services.itinerary_weather_service import get_itinerary_day_weather
 from app.services.llm_service import ItineraryGenerator, get_itinerary_generator
 import app.services.weather_service as weather_service_module
 
@@ -35,6 +37,8 @@ import app.services.weather_service as weather_service_module
 router = APIRouter(tags=["itineraries"])
 poi_repository = POIRepository()
 itinerary_repository = ItineraryRepository()
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=PaginatedItineraryResponse)
@@ -78,6 +82,7 @@ async def generate_itinerary(
             detail="Only tourist users can generate itineraries.",
         )
 
+    logger.info("Generating itinerary for user=%s lat=%s lon=%s", current_user.id, payload.lat, payload.lon)
     return await generate_itinerary_from_request(
         db, payload, current_user, embedding_service, llm_service,
         poi_repository, itinerary_repository, weather_service_module,
@@ -131,6 +136,7 @@ async def reorder_my_itinerary_steps(
             step_ids=payload.step_ids,
         )
     except ValueError as exc:
+        logger.exception("Reorder steps failed for itinerary=%s", itinerary_id)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     if itinerary is None:
@@ -160,6 +166,7 @@ async def reorder_my_itinerary_steps_with_times(
             payload=payload,
         )
     except ValueError as exc:
+        logger.exception("Reorder steps failed for itinerary=%s", itinerary_id)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     if itinerary is None:
@@ -189,6 +196,7 @@ async def add_my_itinerary_step(
             step_data=payload,
         )
     except ValueError as exc:
+        logger.exception("Reorder steps failed for itinerary=%s", itinerary_id)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     if itinerary is None:
@@ -220,6 +228,7 @@ async def update_my_itinerary_step(
             step_in=payload,
         )
     except ValueError as exc:
+        logger.exception("Update step failed for itinerary=%s step=%s", itinerary_id, step_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     if itinerary is None:
@@ -354,19 +363,19 @@ async def reschedule_my_itinerary_step(
     return itinerary
 
 
-@router.get("/{itinerary_id}/weather", response_model=list[ItineraryStepWeatherResponse])
+@router.get("/{itinerary_id}/weather", response_model=ItineraryDayWeatherResponse)
 async def get_my_itinerary_weather(
     itinerary_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[ItineraryStepWeatherResponse]:
+) -> ItineraryDayWeatherResponse:
     if current_user.tourist_profile is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only tourist users can access itinerary weather.",
         )
 
-    return await get_itinerary_step_weather(
+    return await get_itinerary_day_weather(
         db, itinerary_id, current_user.id, itinerary_repository, weather_service_module,
     )
 
@@ -466,6 +475,7 @@ async def visit_my_itinerary_step(
             note=payload.note,
         )
     except ValueError as exc:
+        logger.exception("Record step visit failed for itinerary=%s step=%s", itinerary_id, step_id)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     if visit is None:

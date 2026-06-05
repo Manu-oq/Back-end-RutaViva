@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +14,7 @@ from app.models.user import User
 from app.repositories.entrepreneur_repository import EntrepreneurRepository
 from app.repositories.poi_repository import POIRepository
 from app.schemas.entrepreneur import POIVisitCreate, POIVisitResponse, PublicEntrepreneurPostResponse
-from app.schemas.poi import POICreationCheck, POICreate, POIMediaAppend, POIResponse, POIUpdate
+from app.schemas.poi import POICreationCheck, POICreate, POIMediaAppend, POIResponse, POITouristCreate, POIUpdate
 from app.services.embedding_service import OpenAIEmbeddingService, get_embedding_service
 
 
@@ -21,18 +23,33 @@ poi_repository = POIRepository()
 entrepreneur_repository = EntrepreneurRepository()
 
 
-def _ensure_can_manage_poi(current_user: User, entrepreneur_id: UUID | None) -> None:
-    if current_user.entrepreneur_profile is None:
+def _ensure_can_manage_poi(current_user: User, poi: POI) -> None:
+    if poi.entrepreneur_id is not None:
+        if current_user.entrepreneur_profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only entrepreneur users can manage this POI.",
+            )
+        if poi.entrepreneur_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the owner entrepreneur can manage this POI.",
+            )
+        return
+
+    if poi.created_by_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only entrepreneur users can manage POIs.",
+            detail="Only the creator can manage this POI.",
         )
 
-    if entrepreneur_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the owner entrepreneur can manage this POI.",
-        )
+    if poi.created_at is not None:
+        deadline = poi.created_at.astimezone(timezone.utc) + timedelta(hours=24)
+        if datetime.now(timezone.utc) > deadline:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only edit a POI within 24 hours of creation. Use the report feature instead.",
+            )
 
 
 def _parse_category_ids(category_ids: list[str] | None) -> list[int] | None:
@@ -77,7 +94,6 @@ def _calculate_confidence_score(
     has_category: bool,
     has_opening_hours: bool,
     has_contact: bool,
-    is_verified_entrepreneur: bool,
 ) -> float:
     score = 0.0
     if has_image:
@@ -92,28 +108,20 @@ def _calculate_confidence_score(
         score += 0.1
     if has_contact:
         score += 0.05
-    if is_verified_entrepreneur:
-        score += 0.2
     return min(round(score, 2), 1.0)
 
 
-@router.post("/", response_model=POIResponse | POICreationCheck, status_code=status.HTTP_201_CREATED)
-async def create_poi(
-    payload: POICreate,
-    force_create: bool = Query(default=False, description="Set to true to create even if duplicates are detected."),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
-) -> POIResponse | POICreationCheck:
-    from datetime import datetime, timedelta, timezone
-
+async def _check_rate_limit(db, current_user, user_id_column):
+    # TODO: Rate limit no es atómico — hay race condition si múltiples requests
+    # concurrentes superan el límite antes de que ninguna complete el INSERT.
+    # Lote 3: considerar SELECT ... FOR UPDATE o INSERT con ON CONFLICT.
     now = datetime.now(timezone.utc)
     hour_ago = now - timedelta(hours=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     hourly_count = await db.scalar(
         select(func.count()).select_from(POI).where(
-            POI.entrepreneur_id == current_user.id,
+            user_id_column == current_user.id,
             POI.created_at >= hour_ago,
         )
     )
@@ -125,7 +133,7 @@ async def create_poi(
 
     daily_count = await db.scalar(
         select(func.count()).select_from(POI).where(
-            POI.entrepreneur_id == current_user.id,
+            user_id_column == current_user.id,
             POI.created_at >= today_start,
         )
     )
@@ -134,6 +142,20 @@ async def create_poi(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit: maximum {POI_DAILY_LIMIT} POIs per day.",
         )
+
+
+async def _create_poi_core(
+    db: AsyncSession,
+    current_user: User,
+    embedding_service: OpenAIEmbeddingService,
+    payload: POICreate,
+    force_create: bool,
+    rate_limit_column,
+    *,
+    entrepreneur_id: UUID | None = None,
+    created_by_user_id: UUID | None = None,
+) -> POIResponse | POICreationCheck:
+    await _check_rate_limit(db, current_user, rate_limit_column)
 
     text = f"{payload.name}. {payload.description}"
     embedding = await embedding_service.get_embedding(text)
@@ -165,30 +187,71 @@ async def create_poi(
             pending_creation=pending,
         )
 
-    entrepreneur_id = current_user.id if current_user.entrepreneur_profile is not None else None
-    is_verified = (
-        current_user.entrepreneur_profile is not None
-        and current_user.entrepreneur_profile.verification_status == "verified"
-    )
-
     confidence = _calculate_confidence_score(
         has_image=bool(payload.image_url),
         description_length=len(payload.description),
         has_category=len(payload.category_ids) > 0,
         has_opening_hours=bool(payload.opening_hours_text),
         has_contact=bool(payload.contact_phone or payload.contact_email),
-        is_verified_entrepreneur=is_verified,
     )
-
-    verification_status = "verified" if is_verified else "pending"
 
     return await poi_repository.create_poi(
         db,
         payload,
-        entrepreneur_id=entrepreneur_id,
         embedding=embedding,
-        verification_status=verification_status,
+        entrepreneur_id=entrepreneur_id,
+        created_by_user_id=created_by_user_id,
+        verification_status="pending",
         confidence_score=confidence,
+    )
+
+
+@router.post("/entrepreneur/", response_model=POIResponse | POICreationCheck, status_code=status.HTTP_201_CREATED)
+async def create_entrepreneur_poi(
+    payload: POICreate,
+    force_create: bool = Query(default=False, description="Set to true to create even if duplicates are detected."),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
+) -> POIResponse | POICreationCheck:
+    return await _create_poi_core(
+        db, current_user, embedding_service, payload, force_create,
+        POI.entrepreneur_id,
+        entrepreneur_id=current_user.id,
+    )
+
+
+@router.post("/", response_model=POIResponse | POICreationCheck, status_code=status.HTTP_201_CREATED)
+async def create_poi(
+    payload: POICreate,
+    force_create: bool = Query(default=False, description="Set to true to create even if duplicates are detected."),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
+) -> POIResponse | POICreationCheck:
+    """Backward-compatible alias for POST /pois/entrepreneur/."""
+    return await create_entrepreneur_poi(
+        payload=payload,
+        force_create=force_create,
+        db=db,
+        current_user=current_user,
+        embedding_service=embedding_service,
+    )
+
+
+@router.post("/tourist/", response_model=POIResponse | POICreationCheck, status_code=status.HTTP_201_CREATED)
+async def create_tourist_poi(
+    payload: POITouristCreate,
+    force_create: bool = Query(default=False, description="Set to true to create even if duplicates are detected."),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    embedding_service: OpenAIEmbeddingService = Depends(get_embedding_service),
+) -> POIResponse | POICreationCheck:
+    return await _create_poi_core(
+        db, current_user, embedding_service, payload, force_create,
+        POI.created_by_user_id,
+        entrepreneur_id=None,
+        created_by_user_id=current_user.id,
     )
 
 
@@ -204,6 +267,14 @@ async def list_my_pois(
         )
 
     return await poi_repository.get_pois_by_entrepreneur(db, entrepreneur_id=current_user.id)
+
+
+@router.get("/my-contributions/", response_model=list[POIResponse])
+async def list_my_contributions(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[POIResponse]:
+    return await poi_repository.get_pois_by_user(db, user_id=current_user.id)
 
 
 @router.get("/search", response_model=list[POIResponse])
@@ -331,14 +402,25 @@ async def append_poi_media(
             detail="POI not found.",
         )
 
-    if (
-        current_poi.entrepreneur_id is not None
-        and current_poi.entrepreneur_id != current_user.id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the owner entrepreneur can update this POI media.",
-        )
+    if current_poi.entrepreneur_id is not None:
+        if current_poi.entrepreneur_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the owner entrepreneur can update this POI media.",
+            )
+    else:
+        if current_poi.created_by_user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the creator can update this POI media.",
+            )
+        if current_poi.created_at is not None:
+            deadline = current_poi.created_at.astimezone(timezone.utc) + timedelta(hours=24)
+            if datetime.now(timezone.utc) > deadline:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only add media within 24 hours of creation.",
+                )
 
     updated = await poi_repository.append_media_url(
         db,
@@ -371,7 +453,7 @@ async def update_poi(
             detail="POI not found.",
         )
 
-    _ensure_can_manage_poi(current_user, current_poi.entrepreneur_id)
+    _ensure_can_manage_poi(current_user, current_poi)
 
     if (payload.latitude is None) != (payload.longitude is None):
         raise HTTPException(
@@ -415,6 +497,6 @@ async def delete_poi(
             detail="POI not found.",
         )
 
-    _ensure_can_manage_poi(current_user, current_poi.entrepreneur_id)
+    _ensure_can_manage_poi(current_user, current_poi)
     await poi_repository.delete_poi(db, poi_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

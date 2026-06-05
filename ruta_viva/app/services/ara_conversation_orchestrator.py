@@ -6,9 +6,10 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ara_messages import AraMessages
 from app.models.user import User
 from app.repositories.ara_repository import AraRepository
-from app.schemas.ara import AraMessageCreate, AraSessionCreate, AraSessionResponse
+from app.schemas.ara import AraMessageCreate, AraMessageResponse, AraSessionCreate, AraSessionResponse
 from app.services.ara_v2.conversation_processor import get_conversation_processor
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ async def handle_message_v2(
     payload: AraMessageCreate,
 ) -> AraSessionResponse:
     """Nuevo handler que usa ConversationProcessor (Ara v2)."""
+    logger.info("Handling message v2 for session=%s user=%s", session_id, current_user.id)
     session = await ara_repository.get_session(db, session_id, current_user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -43,6 +45,7 @@ async def handle_message_v2(
         await ara_repository.commit_or_rollback(db)
         return response
     except Exception:
+        logger.exception("Failed to process message for session=%s user=%s", session_id, current_user.id)
         await db.rollback()
         raise
 
@@ -53,6 +56,7 @@ async def create_session_v2(
     payload: AraSessionCreate,
 ) -> AraSessionResponse:
     """Crear nueva sesion de Ara v2 y procesar el primer mensaje del usuario."""
+    logger.info("Creating Ara session v2 for user=%s", current_user.id)
     try:
         preferences_data: dict = {
             "trip_draft": {
@@ -94,7 +98,17 @@ async def create_session_v2(
             user_message=payload.initial_message,
         )
         await ara_repository.commit_or_rollback(db)
+
+        greeting = AraMessages.get("greeting")
+        if not response.assistant_message or not response.assistant_message.content:
+            response.assistant_message = AraMessageResponse(
+                role="assistant",
+                content=greeting,
+                quick_replies=[],
+            )
+
         return response
     except Exception:
+        logger.exception("Failed to create session v2 for user=%s", current_user.id)
         await db.rollback()
         raise

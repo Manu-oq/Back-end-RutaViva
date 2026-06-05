@@ -5,7 +5,7 @@ from uuid import UUID
 
 from geoalchemy2 import Geography
 from geoalchemy2.elements import WKTElement
-from sqlalchemy import cast, delete, func, select
+from sqlalchemy import cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entrepreneur_profile import EntrepreneurProfile
@@ -13,6 +13,7 @@ from app.models.poi import POI
 from app.models.poi_category import POICategory
 from app.models.poi_visit import POIVisit
 from app.models.review import Review
+from app.models.tourist_profile import TouristProfile
 from app.repositories.base import BaseRepository
 from app.repositories.utils import build_poi_response_from_row, get_category_ids_batch
 from app.schemas.poi import POICreate, POIResponse, POIUpdate, PotentialDuplicate
@@ -36,13 +37,19 @@ class POIRepository(BaseRepository):
         entrepreneur_id: UUID | None = None,
         verification_status: str = "pending",
         confidence_score: float = 0.0,
+        created_by_user_id: UUID | None = None,
     ) -> POIResponse:
         location = from_text(f"POINT({poi_in.longitude} {poi_in.latitude})", srid=4326)
 
-        multimedia_urls: dict[str, Any] = {"cover": poi_in.image_url, "gallery": [poi_in.image_url]}
+        multimedia_urls: dict[str, Any] = (
+            {"cover": poi_in.image_url, "gallery": [poi_in.image_url]}
+            if poi_in.image_url is not None
+            else {"cover": None, "gallery": []}
+        )
 
         poi = POI(
             entrepreneur_id=entrepreneur_id,
+            created_by_user_id=created_by_user_id,
             name=poi_in.name,
             description=poi_in.description,
             description_embedding=embedding,
@@ -151,6 +158,52 @@ class POIRepository(BaseRepository):
             build_poi_response_from_row(poi, latitude, longitude, category_map.get(poi.id, []))
             for poi, latitude, longitude in rows
         ]
+
+    async def get_pois_by_user(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+    ) -> list[POIResponse]:
+        from app.models.user import User
+
+        user_ref = func.coalesce(POI.created_by_user_id, POI.entrepreneur_id)
+        display_name = func.jsonb_extract_path_text(
+            EntrepreneurProfile.admin_data, "display_name"
+        )
+
+        stmt = (
+            select(
+                POI,
+                func.ST_Y(POI.location).label("latitude"),
+                func.ST_X(POI.location).label("longitude"),
+                func.coalesce(
+                    TouristProfile.full_name,
+                    display_name,
+                    User.email,
+                ).label("creator_name"),
+            )
+            .outerjoin(User, User.id == user_ref)
+            .outerjoin(TouristProfile, TouristProfile.user_id == user_ref)
+            .outerjoin(EntrepreneurProfile, EntrepreneurProfile.user_id == user_ref)
+            .where(
+                or_(
+                    POI.created_by_user_id == user_id,
+                    POI.entrepreneur_id == user_id,
+                )
+            )
+            .order_by(POI.created_at.desc())
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+        if not rows:
+            return []
+        category_map = await get_category_ids_batch(db, [poi.id for poi, _, _, _ in rows])
+        responses: list[POIResponse] = []
+        for poi, latitude, longitude, creator_name in rows:
+            resp = build_poi_response_from_row(poi, latitude, longitude, category_map.get(poi.id, []))
+            resp.created_by_user_name = creator_name
+            responses.append(resp)
+        return responses
 
     async def append_media_url(
         self,
@@ -438,9 +491,9 @@ class POIRepository(BaseRepository):
     
         stats_stmt = (
             select(
-                func.coalesce(func.count(POICategory.category_id), 0).label("category_count"),
-                func.coalesce(func.count(Review.id), 0).label("review_count"),
-                func.coalesce(func.count(POIVisit.id), 0).label("visit_count"),
+                func.coalesce(func.count(func.distinct(POICategory.category_id)), 0).label("category_count"),
+                func.coalesce(func.count(func.distinct(Review.id)), 0).label("review_count"),
+                func.coalesce(func.count(func.distinct(POIVisit.id)), 0).label("visit_count"),
             )
             .select_from(POI)
             .outerjoin(POICategory, POICategory.poi_id == POI.id)
@@ -467,18 +520,13 @@ class POIRepository(BaseRepository):
     
         if poi.contact_phone or poi.contact_email:
             score += 0.05
-    
-        if poi.entrepreneur_id is not None:
-            profile = await db.get(EntrepreneurProfile, poi.entrepreneur_id)
-            if profile is not None and profile.verification_status == "verified":
-                score += 0.2
-    
+
         score = min(round(score, 2), 1.0)
-    
+
         poi.confidence_score = score
-        if poi.verification_status == "flagged" and score >= 0.4:
-            poi.verification_status = "pending"
-    
+        if poi.verification_status != "flagged":
+            poi.verification_status = "verified" if score > 0.7 else "pending"
+
         await self._commit_or_rollback(db)
         await db.refresh(poi)
     

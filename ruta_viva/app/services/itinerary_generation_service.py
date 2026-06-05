@@ -53,6 +53,11 @@ NATURE_SUBCATEGORY_GROUPS = {
 }
 
 
+
+def is_generic_itinerary_step(step: Any) -> bool:
+    ai_context = getattr(step, "ai_context", None) or {}
+    return bool(getattr(step, "is_generic", False)) or bool(ai_context.get("is_generic_meal")) or getattr(step, "poi_id", None) is None
+
 def trip_days(payload: GenerateItineraryRequest) -> int:
     return (payload.end_date - payload.start_date).days + 1
 
@@ -223,6 +228,8 @@ def repair_duplicate_poi_steps(
 
     used_ids: set[UUID] = set()
     for step in generated_itinerary.steps:
+        if is_generic_itinerary_step(step):
+            continue
         if step.poi_id not in used_ids:
             used_ids.add(step.poi_id)
             continue
@@ -394,6 +401,8 @@ def repair_invalid_poi_ids(
     by_name = {_normalize_text(poi.name): poi for poi in poi_objects}
 
     for step in generated_itinerary.steps:
+        if is_generic_itinerary_step(step):
+            continue
         if str(step.poi_id) in valid_uuids:
             continue
 
@@ -432,10 +441,12 @@ def repair_lodging_duplicates(
 ) -> GeneratedItinerary:
     """Reemplaza lodging duplicados en el mismo día, manteniendo solo el último (check-in nocturno)."""
     poi_by_id = {poi.id: poi for poi in context_pois}
-    used_ids = {step.poi_id for step in generated_itinerary.steps}
+    used_ids = {step.poi_id for step in generated_itinerary.steps if not is_generic_itinerary_step(step)}
 
     lodging_steps_by_date: dict[date, list] = {}
     for step in generated_itinerary.steps:
+        if is_generic_itinerary_step(step):
+            continue
         if step.arrival_time is None:
             continue
         poi = poi_by_id.get(step.poi_id)
@@ -478,6 +489,8 @@ def repair_latest_start_times(
     poi_by_id = {str(p.id): p for p in poi_objects}
 
     for step in generated_itinerary.steps:
+        if is_generic_itinerary_step(step):
+            continue
         if not step.arrival_time:
             continue
 
@@ -637,10 +650,12 @@ def repair_schedule_and_category_issues(
     payload: GenerateItineraryRequest,
 ) -> GeneratedItinerary:
     poi_by_id = {poi.id: poi for poi in context_pois}
-    used_ids = {step.poi_id for step in generated_itinerary.steps}
+    used_ids = {step.poi_id for step in generated_itinerary.steps if not is_generic_itinerary_step(step)}
     repaired_steps = list(generated_itinerary.steps)
 
     for step in repaired_steps:
+        if is_generic_itinerary_step(step):
+            continue
         poi = poi_by_id.get(step.poi_id)
         if poi is None or step_fits_opening_windows(step, poi):
             continue
@@ -687,6 +702,8 @@ def repair_schedule_and_category_issues(
         consecutive_category_counts: Counter[int] = Counter()
         previous_primary_category: int | None = None
         for step in ordered:
+            if is_generic_itinerary_step(step):
+                continue
             poi = poi_by_id.get(step.poi_id)
             primary_category = primary_category_id(poi)
             if primary_category == previous_primary_category and primary_category is not None:
@@ -767,6 +784,25 @@ def validate_generated_itinerary_rules(
     lodging_steps_by_date: dict[date, list] = {}
     poi_counts: Counter[UUID] = Counter()
     for step in generated_itinerary.steps:
+        if is_generic_itinerary_step(step):
+            if step.arrival_time is not None and step.departure_time is not None:
+                if step.arrival_time.date() < payload.start_date or step.arrival_time.date() > payload.end_date:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="The LLM returned an itinerary step outside the requested date range.",
+                    )
+                if step.departure_time.date() < payload.start_date or step.departure_time.date() > payload.end_date:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="The LLM returned an itinerary departure_time outside the requested date range.",
+                    )
+                if step.departure_time <= step.arrival_time:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="The LLM returned an itinerary step with invalid time ordering.",
+                    )
+                steps_by_date.setdefault(step.arrival_time.date(), []).append(step)
+            continue
         poi = poi_by_id.get(step.poi_id)
         if poi is None:
             continue
@@ -843,7 +879,13 @@ def validate_generated_itinerary_rules(
     max_unexplained_gap = timedelta(hours=2, minutes=30)
     for day_steps in steps_by_date.values():
         ordered_steps = sorted(
-            [step for step in day_steps if step.arrival_time is not None and step.departure_time is not None],
+            [
+                step
+                for step in day_steps
+                if step.arrival_time is not None
+                and step.departure_time is not None
+                and not is_generic_itinerary_step(step)
+            ],
             key=lambda step: step.arrival_time,
         )
         for previous, current in zip(ordered_steps, ordered_steps[1:], strict=False):
@@ -867,6 +909,8 @@ def validate_generated_itinerary_rules(
         previous_category: int | None = None
         gastronomy_count = 0
         for step in ordered_steps:
+            if is_generic_itinerary_step(step):
+                continue
             poi = poi_by_id.get(step.poi_id)
             primary_category = primary_category_id(poi)
             if primary_category == previous_category and primary_category is not None:

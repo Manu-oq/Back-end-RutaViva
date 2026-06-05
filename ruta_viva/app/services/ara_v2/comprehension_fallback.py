@@ -31,6 +31,7 @@ def fallback_comprehend(
             ],
             actualizaciones_memoria=[],
             tono="neutro",
+            modo="guiado",
         )
 
     herramientas: list[str] = []
@@ -38,6 +39,7 @@ def fallback_comprehend(
     entidades: list[ExtractedEntity] = []
     memoria: list[MemoryFact] = []
     preguntas: list[str] = []
+    mode = "guiado"
 
     # build_itinerary: explicit action verbs always trigger
     if any(kw in msg for kw in ["generar", "genera", "hacelo todo", "armame", "creame", "que lo arme ara", "armar itinerario", "crear viaje", "generar viaje", "armar viaje"]):
@@ -58,6 +60,15 @@ def fallback_comprehend(
     if any(kw in msg for kw in ["cambiar", "reemplazar", "otro lugar", "cambia", "reemplaza"]):
         intenciones.append("suggest_replacement")
         herramientas.append("suggest_replacement")
+
+    auto_keywords = ["hacelo todo", "hazlo tu", "sorprendeme", "sorpréndeme", "creame el itinerario",
+                     "armame la ruta", "decide por mi", "confio en ti", "viaje sorpresa",
+                     "hacelo todo tu", "crea el itinerario", "hazlo todo"]
+    if any(kw in msg for kw in auto_keywords):
+        mode = "auto"
+        if "build_itinerary" not in herramientas:
+            herramientas.append("build_itinerary")
+            intenciones.append("build_itinerary")
 
     found_dest = None
     for dest in KNOWN_DESTINATIONS:
@@ -170,4 +181,5 @@ def fallback_comprehend(
         preguntas_pendientes=preguntas,
         actualizaciones_memoria=memoria,
         tono="neutro",
+        modo=mode,
     )

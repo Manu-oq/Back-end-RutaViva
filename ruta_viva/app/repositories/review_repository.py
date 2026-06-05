@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from uuid import UUID
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from app.models.poi import POI
 from app.models.review import Review
 from app.models.tourist_profile import TouristProfile

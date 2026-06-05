@@ -1,12 +1,13 @@
 from typing import Any, Literal
 from uuid import UUID
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class POIBase(BaseModel):
     name: str
-    description: str = Field(min_length=60)
+    description: str
     access_type: Literal["public", "restricted", "private"]
     contact_phone: str | None = None
     contact_email: str | None = None
@@ -19,12 +20,17 @@ class POIBase(BaseModel):
 class POICreate(POIBase):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    description: str = Field(min_length=20)
     image_url: str
+
+
+class POITouristCreate(POICreate):
+    image_url: str | None = None
 
 
 class POIUpdate(BaseModel):
     name: str | None = None
-    description: str | None = None
+    description: str | None = Field(default=None, min_length=20)
     access_type: Literal["public", "restricted", "private"] | None = None
     contact_phone: str | None = None
     contact_email: str | None = None
@@ -63,5 +69,9 @@ class POIResponse(POIBase):
     image_url: str | None = None
     verification_status: str = "pending"
     confidence_score: float = 0.0
+    entrepreneur_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+    created_by_user_name: str | None = None
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
