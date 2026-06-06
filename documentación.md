@@ -1,6 +1,6 @@
 # Documentación Técnica — Backend Ruta Viva
 
-> Última actualización: **2026-06-03**  
+> Última actualización: **2026-06-05**  
 > Última actualización de refactorización: **2026-06-03** (Fases 1-2 completadas)
 >
 > Documento técnico exhaustivo del backend de Ruta Viva. Cubre cada archivo del codebase, cada endpoint, cada modelo y cada flujo de datos. Dirigido a desarrolladores que necesitan entender, mantener o extender el sistema.
@@ -25,6 +25,7 @@
 14. [Comandos Útiles](#14-comandos-útiles)
 15. [Guía de Contribución](#15-guía-de-contribución)
 16. [Referencias Rápidas](#16-referencias-rápidas)
+17. [Ara v2 — Asistente Conversacional](#17-ara-v2--asistente-conversacional)
 
 ---
 
@@ -474,13 +475,13 @@ nuevo_perfil = (perfil_actual * 0.9) + (embedding_review * 0.1)
 
 ### 4.6 Ara — Asistente Conversacional (`/api/v1/ara`)
 
-| Método | Ruta | Auth | Rate Limit | Descripción |
-|--------|------|------|------------|-------------|
-| POST | `/sessions` | Sí (tourist) | 5/min | Crear sesión conversacional + procesar primer mensaje |
-| POST | `/sessions/{session_id}/messages` | Sí (tourist) | 10/min | Enviar mensaje y recibir respuesta |
-| GET | `/sessions/{session_id}/messages` | Sí (tourist) | — | Obtener historial de mensajes |
-| PATCH | `/sessions/{session_id}/intent` | Sí (tourist) | — | Actualizar intent desde UI (destino, fechas, pace, intereses) |
-| POST | `/sessions/{session_id}/generate-itinerary/stream` | Sí (tourist) | 3/min | **SSE streaming** de generación de itinerario |
+| Método | Ruta | Auth | Rate Limit | Handler | Descripción |
+|--------|------|------|------------|---------|-------------|
+| POST | `/sessions` | Sí (tourist) | 5/min | `create_session_v2()` | Crear sesión conversacional + procesar primer mensaje (v2: conversation_processor) |
+| POST | `/sessions/{session_id}/messages` | Sí (tourist) | 10/min | `handle_message_v2()` | Enviar mensaje y recibir respuesta (v2: conversation_processor) |
+| GET | `/sessions/{session_id}/messages` | Sí (tourist) | — | `get_session_messages()` | Obtener historial de mensajes |
+| PATCH | `/sessions/{session_id}/intent` | Sí (tourist) | — | `update_session_intent()` | Actualizar intent desde UI (destino, fechas, pace, intereses) |
+| POST | `/sessions/{session_id}/generate-itinerary/stream` | Sí (tourist) | 3/min | `stream_generate_itinerary()` | **SSE streaming** de generación de itinerario |
 
 **Formato SSE del streaming:**
 ```
@@ -1238,7 +1239,19 @@ Si se detecta inyección, `comprehend()` retorna un `ComprehensionResult` con in
 
 Adicionalmente, `sanitize_user_message()` envuelve el mensaje del usuario en tags `<user_message>` para que el LLM no lo interprete como instrucciones de sistema.
 
-### 8.7 Validación de RUT Chileno
+### 8.7 Rate Limiting para Endpoints Conversacionales (Ara)
+
+Los endpoints de Ara tienen rate limits agresivos por su costo computacional (LLM + embeddings + búsqueda semántica):
+
+| Endpoint | Límite | Justificación |
+|----------|--------|---------------|
+| `POST /ara/sessions` | 5/min | Anti-abuso en creación de sesiones |
+| `POST /ara/sessions/{id}/messages` | 10/min | Protección del flujo conversacional (GPT-4o-mini por mensaje) |
+| `POST /ara/sessions/{id}/generate-itinerary/stream` | 3/min | Operación más costosa (DeepSeek + embeddings + clima + búsqueda + reparación) |
+
+Implementado con slowapi en `app/core/rate_limit.py`, key function `get_remote_address` (por IP). Handler 429 en `app/main.py:132` con mensaje en español.
+
+### 8.8 Validación de RUT Chileno
 
 **Archivo:** `app/core/rut.py` (36 líneas)
 
@@ -1247,7 +1260,7 @@ Adicionalmente, `sanitize_user_message()` envuelve el mensaje del usuario en tag
 - Soporta dígito verificador K (10) y 0 (11)
 - Usado en `EntrepreneurProfileCreate` y en la activación de perfil emprendedor
 
-### 8.8 Manejo de Errores HTTP
+### 8.9 Manejo de Errores HTTP
 
 **Jerarquía de excepciones de dominio (`app/core/exceptions.py`, 25 líneas):**
 ```python
@@ -1272,7 +1285,7 @@ AppError (status_code=500)
 }
 ```
 
-### 8.9 Protección contra Path Traversal en Media
+### 8.10 Protección contra Path Traversal en Media
 
 **Archivo:** `app/main.py:58-75` (`_resolve_media_path()`)
 
@@ -1371,7 +1384,7 @@ tests/
     └── test_ara_v2_flow.py                              # 12 tests
 ```
 
-**TOTAL: 179 test functions** distribuidas en 14 archivos de test.
+**TOTAL: ~217 test functions** distribuidas en 19 archivos de test (92 de Ara v2).
 
 ### 10.2 Desglose por Archivo
 
@@ -1832,7 +1845,7 @@ docker compose logs -f api
 ```bash
 cd ruta_viva
 
-# Todos los tests (179 test functions)
+# Todos los tests (~217 test functions)
 python -m pytest -x -q
 
 # Solo tests unitarios
@@ -1957,7 +1970,7 @@ python scripts/quality_snapshot.py
 
 ### 15.4 Antes de Commit
 
-1. `python -m pytest -x -q` — Todos los 179 tests deben pasar.
+1. `python -m pytest -x -q` — Todos los ~217 tests deben pasar.
 2. Revisar `git diff` para asegurar que no hay secrets, debug prints ni código comentado.
 3. Commit messages en inglés, formato conventional commits.
 
@@ -2030,8 +2043,9 @@ python scripts/quality_snapshot.py
 | Services (incluyendo ara_v2) | 33 |
 | Migraciones Alembic | 20 |
 | Scripts | 14 |
-| Tests (total functions) | ~232 |
-| Archivos de test | 23 |
+| Tests (total functions) | ~217 |
+| Archivos de test | 19 |
+| — Ara v2 tests (unit + e2e) | ~92 |
 | Líneas totales de código fuente (estimado) | ~21,000 |
 
 ### 16.3 Módulos Más Grandes (Top 10 por líneas)
@@ -2093,4 +2107,168 @@ python scripts/quality_snapshot.py
 
 ---
 
-*Fin del documento. Última revisión integral: 2026-06-03.*
+*Fin del documento. Última revisión integral: 2026-06-05.*
+
+---
+
+## 17. Ara v2 — Asistente Conversacional
+
+### 17.1 Visión General
+
+Ara v2 es la segunda generación del asistente conversacional de Ruta Viva. Reemplaza el sistema monolítico de v1 (handlers hardcodeados) por una arquitectura modular basada en cuatro pilares:
+
+1. **Comprensión semántica** (GPT-4o-mini) — entiende la intención del usuario en lenguaje natural, no por reglas.
+2. **Memoria persistente** (embeddings en PostgreSQL/HNSW) — recuerda preferencias y restricciones del usuario entre sesiones.
+3. **Orquestación de herramientas** — ejecuta `search_pois`, `get_weather`, `build_itinerary`, `answer_question`, `replace_step`, `geocode_destination` según la intención detectada.
+4. **Respuestas naturales** (GPT-4o-mini) — genera texto contextual con quick replies solo cuando hay decisiones puntuales.
+
+### 17.2 Arquitectura
+
+```
+Usuario → Endpoint HTTP → ConversationProcessor (app/services/ara_v2/conversation_processor.py:29)
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+              MemoryService    Comprensor      ToolOrchestrator
+              (recuperar)    (GPT-4o-mini)   (ejecutar tools)
+              memory_service  comprehender    tool_orchestrator
+              .py:24          .py:71          .py:33
+                    │               │               │
+                    ▼               ▼               ▼
+              conversation_   Comprehension   ToolExecution
+              memory table      Result          Result
+                                    │
+                                    ▼
+                          ResponseGenerator
+                          (GPT-4o-mini + fallbacks)
+                          response_generator.py:48
+                                    │
+                                    ▼
+                          AraSessionResponse
+```
+
+### 17.3 Servicios del Subsistema (`app/services/ara_v2/`)
+
+| Archivo | Líneas | Responsabilidad |
+|---------|--------|----------------|
+| `conversation_processor.py` | 662 | Orquestador principal. `process_user_message()` con flujo de 10 pasos: memoria → comprensión → hechos → herramientas → respuesta. `update_session_intent()` para cambios de UI. |
+| `tool_orchestrator.py` | 663 | Motor de ejecución de herramientas. `execute()` rutea según `herramientas_necesarias`: search_pois, build_itinerary, answer_question, replace_step, geocode_destination, update_preferences, generate_trip_draft, show_options, confirm_plan, review_memories, consolidate_memories. |
+| `comprehender.py` | 208 | Wrapper GPT-4o-mini con JSON schema estricto. `comprehend()` con `sanitize_user_message()` y `detect_prompt_injection()`. Fallback a `comprehension_fallback.py` si el LLM falla. |
+| `comprehension_fallback.py` | 185 | `fallback_comprehend()` — reglas deterministas por keywords y patrones. Detección de build_itinerary, search_pois, answer_question, preferencias. Categorías: naturaleza, gastronomía, cultura, aventura, alojamiento, termas. |
+| `response_generator.py` | 381 | Genera respuestas naturales con GPT-4o-mini. `_generate_search_response()`, `_generate_itinerary_response()`, `_generate_clarify_response()`, `_build_quick_replies()`, `_contextual_quick_replies()`. Catálogo de fallbacks por status. |
+| `answer_service.py` | 133 | RAG sobre descripciones de POIs para responder preguntas puntuales (`answer_question()`). Evidence level tracking. |
+| `prompt_manager.py` | 187 | Sistema de prompts: `build_comprehension_prompt()` y `build_generation_prompt()`. `_COMPREHENSION_SYSTEM`: reglas de extracción de intenciones, entidades, memoria, modos (auto/mixto/guiado). `_GENERATION_SYSTEM`: reglas de generación de itinerarios (3-6 actividades/día, distancias, clima). |
+| `memory_service.py` | 185 | CRUD de memoria semántica con embeddings. `store_fact()`, `store_facts_batch()` (batch embedding), `retrieve_relevant_facts()` (HNSW), `update_tourist_profile_embedding()`, `delete_memory()`, `consolidate_memories()`. Aislamiento estricto por tourist_id. |
+| `geocoding_service.py` | 124 | `geocode_destination()` — resuelve nombres de destino a coordenadas. 3 niveles: cache en memoria → GPT-4o-mini → hardcoded fallback (52 destinos de La Araucanía). |
+| `category_mapping.py` | 42 | `CATEGORY_INTENT_TO_DB_NAMES`: mapeo de intents del compresor (ej: "gastronomía" → ["Gastronomía"]) a nombres canónicos de DB. `DB_NAME_TO_INTENTS`: mapeo inverso para debugging. |
+| `utils.py` | 30 | `get_gpt_mini_client()` — singleton `AsyncOpenAI` para GPT-4o-mini con timeout de `settings.gpt_mini_timeout_seconds`. |
+
+### 17.4 Migración desde v1
+
+| Archivo v1 | Reemplazado por | Razón |
+|-----------|----------------|-------|
+| `ara_turn_classifier.py` | `comprehender.py` | Clasificación por reglas → comprensión semántica con LLM |
+| `ara_preference_merger.py` | `memory_service.py` | Merge de preferencias en dict → memoria semántica con embeddings |
+| `ara_response_builder.py` | `response_generator.py` | Quick replies hardcodeados → respuestas naturales con GPT-4o-mini |
+| `ara_constants.py` (parcialmente) | Varios | Términos hardcodeados → config DB + servicios específicos |
+| `ara_chat_service.py` (269 líneas) | `response_generator.py` + `answer_service.py` | Chat genérico → respuestas contextuales + RAG |
+| `ara_itinerary_generation.py` (401 líneas) | `ara_itinerary_core.py` | Generación monolítica → pipeline de 7 fases con callback pattern |
+
+**Lo que NO cambió:** Los endpoints HTTP y los schemas de request/response son idénticos. El frontend no se entera de la migración.
+
+### 17.5 Contratos HTTP
+
+| Endpoint | Método | Handler v2 | Request | Response |
+|----------|--------|------------|---------|----------|
+| `/api/v1/ara/sessions` | POST | `create_session_v2()` | `AraSessionCreate` | `AraSessionResponse` (201) |
+| `/api/v1/ara/sessions/{id}/messages` | POST | `handle_message_v2()` | `AraMessageCreate` | `AraSessionResponse` (200) |
+| `/api/v1/ara/sessions/{id}/messages` | GET | `get_session_messages()` | — | `AraMessagesResponse` (200) |
+| `/api/v1/ara/sessions/{id}/intent` | PATCH | `update_session_intent()` | `AraIntentUpdate` | `AraSessionResponse` (200) |
+| `/api/v1/ara/sessions/{id}/generate-itinerary/stream` | POST | `stream_generate_itinerary()` | `AraGenerateItineraryRequest` (opcional) | `text/event-stream` (200) |
+
+### 17.6 Flujo de Conversación (10 pasos)
+
+```
+POST /ara/sessions/{id}/messages
+  → ara_conversation_orchestrator.handle_message_v2()  [app/services/ara_conversation_orchestrator.py, 110 líneas]
+    → ConversationProcessor.process_user_message()      [app/services/ara_v2/conversation_processor.py:29]
+
+      PASO 1: memory_service.retrieve_relevant_facts(5 hechos más cercanos por HNSW)
+      PASO 2: _get_recent_messages() — últimos 10 mensajes de la sesión
+      PASO 3: comprensor.comprehend(msg, context, facts, trip_draft)
+              → GPT-4o-mini analiza intención, entidades, preferencias, memoria
+              → Si falla: fallback_comprehend() rule-based
+      PASO 4: memory_service.store_facts_batch() — batch embedding → INSERT conversation_memories
+              → Si falla batch: store_fact() individual con fallback sin embedding
+      PASO 5: Actualizar TouristProfile.interests_embedding si preferencia > 0.8
+      PASO 6: Persiste mensaje del usuario
+      PASO 7: tool_orchestrator.execute(comprehension, session, user, db)
+              → Gate fuera de dominio: intención "general" + confianza < 0.4 → clarify
+              → Rutea según herramientas_necesarias:
+                • search_pois: search_candidate_pois() → diversifica → quick replies
+                • answer_question: answer_service.answer_question() sobre POI
+                • build_itinerary + fechas: status="ready_to_generate", msg con stream_url
+                • replace_step: search_step_replacement_alternatives()
+              → _resolve_poi_reference() para detectar selección de POI por nombre
+      PASO 8: Si build_itinerary con fechas → retorna AraSessionResponse con stream_url
+      PASO 9: response_generator.generate_response(comprehension, tool_result, session)
+              → GPT-4o-mini genera respuesta natural en español
+              → Fallbacks estructurados por status (generate/search/respond/clarify/replace/error)
+      PASO 10: Persiste mensaje del asistente + quick replies
+    → AraSessionResponse
+```
+
+### 17.7 Generación SSE de Itinerario
+
+```
+POST /ara/sessions/{id}/generate-itinerary/stream  [app/api/v1/endpoints/ara.py]
+  → ara_streaming_service.stream_itinerary_generation()  [app/services/ara_streaming_service.py:36]
+    → Crea asyncio.Queue para eventos SSE
+    → _on_phase callback: encola eventos status/warning/result/error
+    → Lanza generate_itinerary_core() en asyncio.Task  [app/services/ara_itinerary_core.py:62]
+      → Fase 1-7 secuenciales (validating → query → search → weather → LLM → repair → save)
+      → Si < 5 POIs, emite evento "warning" con action="expand_search"
+    → Loop SSE: event_queue.get() timeout 1s, yield "event: {type}\ndata: {json}\n\n"
+    → CancelledError: marca itinerary como abandoned
+```
+
+**Eventos SSE:** `status` (phase + message), `warning` (message + poi_count + action), `result` (session_id + status + itinerary), `error` (message).
+
+### 17.8 Memoria Semántica
+
+La tabla `conversation_memories` (`models/conversation_memory.py`, 40 líneas) almacena hechos con embeddings:
+
+1. Al recibir un mensaje, `retrieve_relevant_facts()` busca los 5 hechos más cercanos por cosine similarity (HNSW).
+2. El compresor extrae `actualizaciones_memoria` del mensaje (nuevos hechos para guardar).
+3. `store_facts_batch()` genera embeddings en batch y los inserta.
+4. Si la categoría es `"preferencia"` y confianza > 0.8, actualiza `TouristProfile.interests_embedding` (media móvil exponencial: 90% perfil + 10% nuevo hecho).
+5. Si falla batch embedding: fallback individual con `store_fact()`.
+6. Si falla embedding individual: guarda el hecho sin embedding (último recurso).
+7. Aislamiento estricto: solo se recuperan hechos del mismo `tourist_id`.
+
+### 17.9 Configuración
+
+Variables de entorno relevantes para Ara v2:
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | — | API key de OpenAI (embeddings + GPT-4o-mini) |
+| `DEEPSEEK_API_KEY` | — | API key de DeepSeek (generación de itinerarios) |
+| `OPENWEATHER_API_KEY` | — | API key de OpenWeatherMap (pronóstico) |
+| `OPENAI_GPT_MINI_MODEL` | `gpt-4o-mini` | Modelo para comprensión y respuestas |
+| `GPT_MINI_TIMEOUT_SECONDS` | `10.0` | Timeout para GPT-4o-mini |
+
+### 17.10 Tests de Ara v2
+
+| Archivo | Tests | Área |
+|---------|-------|------|
+| `tests/unit/ara_v2/test_comprehender.py` | 29 | Comprensión LLM + fallback |
+| `tests/unit/ara_v2/test_response_generator.py` | 14 | Generación de respuestas |
+| `tests/e2e/test_ara_v2_flow.py` | 12 | Flujo conversacional end-to-end |
+| `tests/unit/ara_v2/test_tool_orchestrator.py` | 12 | Ejecución de herramientas |
+| `tests/unit/ara_v2/test_prompt_manager.py` | 8 | Construcción de prompts |
+| `tests/unit/ara_v2/test_memory_integration.py` | 8 | Integración de memoria |
+| `tests/unit/ara_v2/test_memory_service.py` | 6 | CRUD de memoria semántica |
+| `tests/unit/ara_v2/test_itinerary_payload_normalization.py` | 3 | Normalización de payload |
+
+**Total Ara v2: ~92 tests** (80 unitarios + 12 e2e).
