@@ -5,10 +5,9 @@ from uuid import UUID
 
 from geoalchemy2 import Geography
 from geoalchemy2.elements import WKTElement
-from sqlalchemy import cast, delete, func, or_, select
+from sqlalchemy import cast, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entrepreneur_profile import EntrepreneurProfile
 from app.models.poi import POI
 from app.models.poi_category import POICategory
 from app.models.poi_visit import POIVisit
@@ -41,9 +40,10 @@ class POIRepository(BaseRepository):
     ) -> POIResponse:
         location = from_text(f"POINT({poi_in.longitude} {poi_in.latitude})", srid=4326)
 
+        image_url = poi_in.image_url.strip() if isinstance(poi_in.image_url, str) else poi_in.image_url
         multimedia_urls: dict[str, Any] = (
-            {"cover": poi_in.image_url, "gallery": [poi_in.image_url]}
-            if poi_in.image_url is not None
+            {"cover": image_url, "gallery": [image_url]}
+            if image_url and isinstance(image_url, str) and image_url.strip()
             else {"cover": None, "gallery": []}
         )
 
@@ -166,11 +166,6 @@ class POIRepository(BaseRepository):
     ) -> list[POIResponse]:
         from app.models.user import User
 
-        user_ref = func.coalesce(POI.created_by_user_id, POI.entrepreneur_id)
-        display_name = func.jsonb_extract_path_text(
-            EntrepreneurProfile.admin_data, "display_name"
-        )
-
         stmt = (
             select(
                 POI,
@@ -178,19 +173,12 @@ class POIRepository(BaseRepository):
                 func.ST_X(POI.location).label("longitude"),
                 func.coalesce(
                     TouristProfile.full_name,
-                    display_name,
                     User.email,
                 ).label("creator_name"),
             )
-            .outerjoin(User, User.id == user_ref)
-            .outerjoin(TouristProfile, TouristProfile.user_id == user_ref)
-            .outerjoin(EntrepreneurProfile, EntrepreneurProfile.user_id == user_ref)
-            .where(
-                or_(
-                    POI.created_by_user_id == user_id,
-                    POI.entrepreneur_id == user_id,
-                )
-            )
+            .outerjoin(User, User.id == POI.created_by_user_id)
+            .outerjoin(TouristProfile, TouristProfile.user_id == POI.created_by_user_id)
+            .where(POI.created_by_user_id == user_id)
             .order_by(POI.created_at.desc())
         )
         result = await db.execute(stmt)
@@ -439,20 +427,24 @@ class POIRepository(BaseRepository):
         media: dict[str, Any] | None,
         image_url: str,
     ) -> dict[str, Any]:
+        if not image_url or not isinstance(image_url, str) or not image_url.strip():
+            return media or {"cover": None, "gallery": []}
+
         if media is None:
             media = {"cover": None, "gallery": []}
 
-        gallery = media.get("gallery")
-        if not isinstance(gallery, list):
-            gallery = []
+        gallery: list[str] = [
+            url for url in (media.get("gallery") or [])
+            if isinstance(url, str) and url.strip()
+        ]
 
-        if image_url not in gallery:
-            gallery.append(image_url)
+        if image_url.strip() not in gallery:
+            gallery.append(image_url.strip())
 
         updated = dict(media)
         updated["gallery"] = gallery
-        if not updated.get("cover"):
-            updated["cover"] = image_url
+        if not updated.get("cover") or not isinstance(updated.get("cover"), str) or not updated["cover"].strip():
+            updated["cover"] = image_url.strip()
         return updated
 
     async def search_by_name(

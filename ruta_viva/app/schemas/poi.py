@@ -2,7 +2,7 @@ from typing import Any, Literal
 from uuid import UUID
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class POIBase(BaseModel):
@@ -18,6 +18,7 @@ class POIBase(BaseModel):
 
 
 class POICreate(POIBase):
+    category_ids: list[int] = Field(default_factory=list, max_length=3)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     description: str = Field(min_length=20)
@@ -36,7 +37,7 @@ class POIUpdate(BaseModel):
     contact_email: str | None = None
     opening_hours_text: str | None = None
     visit_rules: dict[str, Any] | None = None
-    category_ids: list[int] | None = None
+    category_ids: list[int] | None = Field(default=None, max_length=3)
     latitude: float | None = None
     longitude: float | None = None
 
@@ -73,5 +74,11 @@ class POIResponse(POIBase):
     created_by_user_id: UUID | None = None
     created_by_user_name: str | None = None
     created_at: datetime | None = None
+    creator_type: Literal["tourist", "entrepreneur"] = "tourist"
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _set_creator_type(self) -> "POIResponse":
+        self.creator_type = "entrepreneur" if self.entrepreneur_id is not None else "tourist"
+        return self

@@ -368,15 +368,92 @@ class TestMyContributions:
         assert data[0]["created_by_user_name"] == "Test Tourist"
 
     @pytest.mark.asyncio
-    async def test_entrepreneur_created_by_user_name(self, async_client, db_session: AsyncSession):
+    async def test_entrepreneur_poi_not_in_my_contributions(self, async_client, db_session: AsyncSession):
         ent = await _create_entrepreneur(db_session, "contrib-e@test.com")
-        await async_client.post("/api/v1/pois/entrepreneur/", json=_make_create_payload(name="POI Emp"), headers=_headers(ent))
+        create_resp = await async_client.post("/api/v1/pois/entrepreneur/", json=_make_create_payload(name="POI Emp"), headers=_headers(ent))
+        assert create_resp.status_code == 201
 
         resp = await async_client.get("/api/v1/pois/my-contributions/", headers=_headers(ent))
         assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 1
-        assert data[0]["created_by_user_name"] == "Emp contrib-e"
+        assert resp.json() == []
+
+    @pytest.mark.asyncio
+    async def test_entrepreneur_in_mine_not_contributions(self, async_client, db_session: AsyncSession):
+        ent = await _create_entrepreneur(db_session, "contrib-e2@test.com")
+        create_resp = await async_client.post("/api/v1/pois/entrepreneur/", json=_make_create_payload(name="POI Emp Mine"), headers=_headers(ent))
+        assert create_resp.status_code == 201
+
+        contributions = await async_client.get("/api/v1/pois/my-contributions/", headers=_headers(ent))
+        assert contributions.json() == []
+
+        mine = await async_client.get("/api/v1/pois/mine", headers=_headers(ent))
+        assert mine.status_code == 200
+        assert len(mine.json()) == 1
+        assert mine.json()[0]["name"] == "POI Emp Mine"
+
+    @pytest.mark.asyncio
+    async def test_dual_profile_no_overlap(self, async_client, db_session: AsyncSession):
+        dual = await _create_user(db_session, "dual@test.com")
+        db_session.add(TouristProfile(user_id=dual.id, full_name="Dual Tourist", has_own_transport=False))
+        db_session.add(EntrepreneurProfile(
+            user_id=dual.id,
+            verification_status="unverified",
+            admin_data={"display_name": "Dual Emp"},
+        ))
+        await db_session.flush()
+
+        tourist_resp = await async_client.post(
+            "/api/v1/pois/tourist/",
+            json=_make_tourist_payload(name="POI Turista Dual"),
+            headers=_headers(dual),
+        )
+        assert tourist_resp.status_code == 201
+
+        ent_resp = await async_client.post(
+            "/api/v1/pois/entrepreneur/",
+            json=_make_create_payload(name="POI Emprendedor Dual"),
+            headers=_headers(dual),
+        )
+        assert ent_resp.status_code == 201
+
+        contributions = await async_client.get("/api/v1/pois/my-contributions/", headers=_headers(dual))
+        assert contributions.status_code == 200
+        contrib_data = contributions.json()
+        assert len(contrib_data) == 1
+        assert contrib_data[0]["name"] == "POI Turista Dual"
+
+        mine = await async_client.get("/api/v1/pois/mine", headers=_headers(dual))
+        assert mine.status_code == 200
+        mine_data = mine.json()
+        assert len(mine_data) == 1
+        assert mine_data[0]["name"] == "POI Emprendedor Dual"
+
+    @pytest.mark.asyncio
+    async def test_creator_type_field(self, async_client, db_session: AsyncSession):
+        dual = await _create_user(db_session, "ct@test.com")
+        db_session.add(TouristProfile(user_id=dual.id, full_name="CT Tourist", has_own_transport=False))
+        db_session.add(EntrepreneurProfile(
+            user_id=dual.id,
+            verification_status="unverified",
+            admin_data={"display_name": "CT Emp"},
+        ))
+        await db_session.flush()
+
+        tourist_resp = await async_client.post(
+            "/api/v1/pois/tourist/",
+            json=_make_tourist_payload(name="CT POI"),
+            headers=_headers(dual),
+        )
+        assert tourist_resp.status_code == 201
+        assert tourist_resp.json()["creator_type"] == "tourist"
+
+        ent_resp = await async_client.post(
+            "/api/v1/pois/entrepreneur/",
+            json=_make_create_payload(name="CT POI Emp"),
+            headers=_headers(dual),
+        )
+        assert ent_resp.status_code == 201
+        assert ent_resp.json()["creator_type"] == "entrepreneur"
 
     @pytest.mark.asyncio
     async def test_cross_user_isolation(self, async_client, db_session: AsyncSession):

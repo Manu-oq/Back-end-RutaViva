@@ -1,0 +1,49 @@
+{
+  "label": "snapshot-20260623-220511",
+  "timestamp": "2026-06-23T22:05:11.132651+00:00",
+  "metrics": {
+    "total_pois": 11532,
+    "verified": 11531,
+    "verified_pct": 100.0,
+    "avg_confidence": 0.766,
+    "no_opening_hours": 11055,
+    "no_hours_pct": 95.9,
+    "short_descriptions": 8,
+    "short_desc_pct": 0.1,
+    "generic_descriptions": 11017,
+    "generic_desc_pct": 95.5,
+    "category_distribution": {
+      "Turismo": 5870,
+      "Naturaleza": 4180,
+      "Termas/Bienestar": 2592,
+      "Transporte/Accesos": 2571,
+      "Lagos/Ríos/Playas": 1661,
+      "Gastronomía": 1313,
+      "Artesanía/Compras locales": 1277,
+      "Servicios turísticos/Información": 801,
+      "Cultura": 602,
+      "Museos/Patrimonio": 596,
+      "Montañas/Volcanes/Miradores": 473,
+      "Parques/Reservas": 372,
+      "Aventura/Deportes": 338,
+      "Alojamiento": 261,
+      "Trekking/Senderismo": 66
+    },
+    "by_verification_status": {
+      "verified": 11531,
+      "pending": 1
+    },
+    "confidence_buckets": {
+      "0.0-0.3": 0,
+      "0.3-0.6": 10,
+      "0.6-0.8": 3241,
+      "0.8-1.0": 8281
+    },
+    "by_source": {
+      "osm": 11531,
+      "conaf": 0,
+      "user_created": 0,
+      "unknown": 1
+    }
+  }
+}

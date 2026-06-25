@@ -106,5 +106,6 @@ def build_poi_response_from_row(
         confidence_score=float(poi.confidence_score) if poi.confidence_score is not None else 0.0,
         entrepreneur_id=poi.entrepreneur_id,
         created_by_user_id=poi.created_by_user_id,
+        created_by_user_name=getattr(poi, "created_by_user_name", None),
         created_at=poi.created_at,
     )
