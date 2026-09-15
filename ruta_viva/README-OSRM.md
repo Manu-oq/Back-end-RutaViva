@@ -14,10 +14,7 @@ itinerarios y para mostrar tiempos estimados de viaje.
 ## Setup inicial (una sola vez)
 
 ```bash
-# Desde el directorio raíz del proyecto (ruta_viva/)
-cd ruta_viva
-
-# 1. Ejecutar script de setup (descarga PBF + procesa datos)
+# Desde ruta_viva/, ejecutar el script de setup
 bash scripts/setup_osrm.sh
 ```
 
@@ -32,7 +29,7 @@ Los datos procesados se guardan en `osrm_data/`.
 ## Levantar el servidor
 
 ```bash
-# Solo OSRM
+# Solo OSRM, después de ejecutar el setup
 docker compose up -d osrm
 
 # OSRM + API + DB (stack completo)

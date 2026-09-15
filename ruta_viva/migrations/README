@@ -1,1 +1,18 @@
 Generic single-database configuration with an async dbapi.
+
+# Migraciones de Ruta Viva
+
+Este directorio contiene el historial Alembic del esquema PostgreSQL. Los archivos de `versions/` deben conservarse: permiten crear una base nueva y evolucionar instalaciones existentes.
+
+Desde `ruta_viva/`:
+
+```bash
+alembic upgrade head
+alembic current
+```
+
+Para un cambio de esquema, genera una migración descriptiva, revísala antes de aplicarla y no modifiques migraciones ya compartidas:
+
+```bash
+alembic revision --autogenerate -m "describe schema change"
+```

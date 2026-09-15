@@ -3,6 +3,12 @@
 AGENTS.md
 estudio.md
 
+# Agent tooling and machine-local test tunnel artifacts
+.agents/
+.atl/
+.opencode/
+ruta_viva/scripts/testing-scripts/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
