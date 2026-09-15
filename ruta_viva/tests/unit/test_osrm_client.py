@@ -11,7 +11,7 @@ from app.services.osrm_client import OSRMClient, get_osrm_client, reset_osrm_cli
 class TestOSRMClientInit:
     def test_default_base_url(self) -> None:
         client = OSRMClient()
-        assert client._base_url == "http://localhost:5000"
+        assert client._base_url == "http://rutaviva_osrm:5000"
 
     def test_custom_base_url(self) -> None:
         client = OSRMClient(base_url="http://osrm:6000")

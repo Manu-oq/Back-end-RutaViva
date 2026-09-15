@@ -69,7 +69,7 @@ async def _create_itinerary_fixture(
     poi_1 = await _create_poi(db_session, "POI 1", -72.0, -39.0)
     poi_2 = await _create_poi(db_session, "POI 2", -72.1, -39.1)
     poi_3 = await _create_poi(db_session, "POI 3", -72.2, -39.2)
-    itinerary_start_date = start_date or date(2026, 7, 1)
+    itinerary_start_date = start_date or (datetime.now(CHILE_TZ).date() + timedelta(days=7))
     itinerary_end_date = end_date or (itinerary_start_date + timedelta(days=1))
 
     itinerary = Itinerary(

@@ -1,2 +1,9 @@
 .codex
 AGENTS.md
+
+# Local configuration and generated data-quality reports
+.env
+poi_issues.jsonl
+audit_poi_quality.jsonl
+pipeline_state.json
+quality_history/
