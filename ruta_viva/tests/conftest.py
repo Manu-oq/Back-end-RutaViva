@@ -29,6 +29,12 @@ from app.models.poi_visit import POIVisit  # noqa: F401
 from app.models.review import Review  # noqa: F401
 from app.models.tourist_profile import TouristProfile
 from app.models.user import User
+from app.services.embedding_service import get_embedding_service
+
+
+class FakeEmbeddingService:
+    async def get_embedding(self, text: str) -> list[float]:
+        return [0.0] * 1536
 
 TEST_DATABASE_NAME = os.getenv("POSTGRES_TEST_DB", "rutaviva_test_db")
 
@@ -114,6 +120,13 @@ async def async_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fake_embedding_service() -> AsyncGenerator[None, None]:
+    app.dependency_overrides[get_embedding_service] = FakeEmbeddingService
+    yield
+    app.dependency_overrides.pop(get_embedding_service, None)
 
 
 @pytest_asyncio.fixture

@@ -162,12 +162,12 @@ async def test_reorder_with_times_recalculates_order_and_times(
     assert [step["step_order"] for step in payload["steps"]] == [2, 1, 3]
     assert [step["day_index"] for step in payload["steps"]] == [1, 1, 2]
     assert [step["poi_name"] for step in payload["steps"]] == ["POI 1", "POI 2", "POI 3"]
-    assert payload["steps"][0]["arrival_time"].endswith("10:15:00-04:00")
-    assert payload["steps"][0]["departure_time"].endswith("11:15:00-04:00")
-    assert payload["steps"][1]["arrival_time"].endswith("09:00:00-04:00")
-    assert payload["steps"][1]["departure_time"].endswith("10:00:00-04:00")
-    assert payload["steps"][2]["arrival_time"].endswith("09:00:00-04:00")
-    assert payload["steps"][2]["departure_time"].endswith("10:30:00-04:00")
+    assert datetime.fromisoformat(payload["steps"][0]["arrival_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "10:15:00"
+    assert datetime.fromisoformat(payload["steps"][0]["departure_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "11:15:00"
+    assert datetime.fromisoformat(payload["steps"][1]["arrival_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "09:00:00"
+    assert datetime.fromisoformat(payload["steps"][1]["departure_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "10:00:00"
+    assert datetime.fromisoformat(payload["steps"][2]["arrival_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "09:00:00"
+    assert datetime.fromisoformat(payload["steps"][2]["departure_time"]).astimezone(CHILE_TZ).strftime("%H:%M:%S") == "10:30:00"
 
 
 @pytest.mark.asyncio
